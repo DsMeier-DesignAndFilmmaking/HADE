@@ -7,6 +7,7 @@ export interface GeoLocation {
 
 export interface User {
   id: string;
+  username: string | null;
   name: string;
   home_city: string;
   onboarding_complete: boolean;

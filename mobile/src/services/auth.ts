@@ -1,48 +1,40 @@
-/**
- * Auth helpers for HADE mobile app.
- * Uses dev auth endpoints for local development.
- * Swap to Supabase auth for production.
- */
-
+import { supabase } from "../lib/supabase";
 import { useSessionStore } from "../store/useSessionStore";
-import { api } from "./api";
-import type { ApiResponse, User } from "../types";
-
-interface AuthTokens {
-  access_token: string;
-  refresh_token: string;
-  user: User;
-}
 
 export async function sendOtp(phone: string): Promise<void> {
-  await api.post<ApiResponse<{ message: string }>>("/auth/dev/send-otp", {
-    phone,
-  });
+  const { error } = await supabase.auth.signInWithOtp({ phone });
+  if (error) throw new Error(error.message);
 }
 
-export async function verifyOtp(phone: string, token: string): Promise<User> {
-  const { data } = await api.post<ApiResponse<AuthTokens>>(
-    "/auth/dev/verify-otp",
-    { phone, token },
-  );
+export async function verifyOtp(
+  phone: string,
+  token: string,
+): Promise<void> {
+  const { error } = await supabase.auth.verifyOtp({
+    phone,
+    token,
+    type: "sms",
+  });
+  if (error) throw new Error(error.message);
+  // Session is set automatically via onAuthStateChange listener
+}
 
-  const authData = data.data;
-  if (!authData) {
-    throw new Error("No auth data returned");
-  }
-
-  useSessionStore
-    .getState()
-    .setTokens(authData.access_token, authData.refresh_token);
-  useSessionStore.getState().setUser(authData.user);
-
-  return authData.user;
+export async function updateUserMetadata(params: {
+  username: string;
+  displayName: string;
+}): Promise<void> {
+  const { error } = await supabase.auth.updateUser({
+    data: { display_name: params.displayName, username: params.username },
+  });
+  if (error) throw new Error(error.message);
 }
 
 export async function signOut(): Promise<void> {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw new Error(error.message);
   useSessionStore.getState().clearAuth();
 }
 
 export function getAccessToken(): string | null {
-  return useSessionStore.getState().accessToken;
+  return useSessionStore.getState().supabaseSession?.access_token ?? null;
 }

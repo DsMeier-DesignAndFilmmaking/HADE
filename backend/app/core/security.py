@@ -1,33 +1,10 @@
-from uuid import UUID
+"""Backward-compatible re-export.
 
-from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
+All JWT validation logic now lives in ``app.api.deps``.
+Existing routers that ``from app.core.security import get_current_user_id``
+continue to work without changes.
+"""
 
-from app.core.config import settings
+from app.api.deps import bearer_scheme, get_current_user_id  # noqa: F401
 
-bearer_scheme = HTTPBearer()
-
-
-async def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-) -> UUID:
-    """Validate JWT and return the authenticated user's ID."""
-    try:
-        payload = jwt.decode(
-            credentials.credentials,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-        )
-        sub: str | None = payload.get("sub")
-        if sub is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Token missing subject claim",
-            )
-        return UUID(sub)
-    except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-        )
+__all__ = ["bearer_scheme", "get_current_user_id"]

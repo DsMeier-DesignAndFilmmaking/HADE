@@ -1,10 +1,11 @@
 import { create } from "zustand";
+import type { Session } from "@supabase/supabase-js";
 import type { GeoLocation, Intent, User } from "../types";
+import { supabase } from "../lib/supabase";
 
 interface SessionState {
   // Auth
-  accessToken: string | null;
-  refreshToken: string | null;
+  supabaseSession: Session | null;
   isAuthenticated: boolean;
 
   // User profile
@@ -17,8 +18,9 @@ interface SessionState {
   groupSize: number;
 
   // Auth actions
-  setTokens: (accessToken: string, refreshToken: string) => void;
+  setSession: (session: Session | null) => void;
   clearAuth: () => void;
+  initialize: () => () => void;
 
   // User actions
   setUser: (user: User | null) => void;
@@ -32,8 +34,7 @@ interface SessionState {
 
 export const useSessionStore = create<SessionState>((set) => ({
   // Auth
-  accessToken: null,
-  refreshToken: null,
+  supabaseSession: null,
   isAuthenticated: false,
 
   // User profile
@@ -46,15 +47,30 @@ export const useSessionStore = create<SessionState>((set) => ({
   groupSize: 1,
 
   // Auth actions
-  setTokens: (accessToken, refreshToken) =>
-    set({ accessToken, refreshToken, isAuthenticated: true }),
+  setSession: (session) =>
+    set({ supabaseSession: session, isAuthenticated: session !== null }),
   clearAuth: () =>
     set({
-      accessToken: null,
-      refreshToken: null,
+      supabaseSession: null,
       isAuthenticated: false,
       user: null,
     }),
+
+  initialize: () => {
+    // Fetch current session on startup
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      set({ supabaseSession: session, isAuthenticated: session !== null });
+    });
+
+    // Subscribe to auth state changes
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      set({ supabaseSession: session, isAuthenticated: session !== null });
+    });
+
+    return () => subscription.unsubscribe();
+  },
 
   // User actions
   setUser: (user) => set({ user }),

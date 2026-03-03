@@ -17,7 +17,16 @@
       "Bash(xcrun simctl:*)",
       "Bash(ls:*)",
       "Bash(mkdir:*)",
-      "Bash(node:*)"
+      "Bash(node:*)",
+      "Bash(git push:*)",
+      "Bash(git:*)",
+      "Bash(python:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(psql:*)",
+      "Bash(find .:*)",
+      "Bash(pkill:*)",
+      "Bash(npm audit:*)",
+      "Bash(uvicorn app.main:app:*)"
     ]
   }
 }

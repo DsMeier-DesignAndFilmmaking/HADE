@@ -15,6 +15,8 @@ class User(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     phone: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    supabase_id: Mapped[str | None] = mapped_column(String(36), unique=True, index=True, nullable=True)
+    username: Mapped[str | None] = mapped_column(String(30), unique=True, index=True, nullable=True)
     name: Mapped[str] = mapped_column(String(255), default="")
     home_city: Mapped[str] = mapped_column(String(255), default="")
     preference_vector: Mapped[list[float] | None] = mapped_column(ARRAY(Float), nullable=True)

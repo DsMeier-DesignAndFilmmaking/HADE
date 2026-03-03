@@ -1,5 +1,6 @@
 import axios from "axios";
 import { useSessionStore } from "../store/useSessionStore";
+import { supabase } from "../lib/supabase";
 import type {
   ApiResponse,
   DecideRequest,
@@ -24,18 +25,21 @@ export const api = axios.create({
 
 // Inject Bearer token on every outgoing request
 api.interceptors.request.use((config) => {
-  const token = useSessionStore.getState().accessToken;
+  const token = useSessionStore.getState().supabaseSession?.access_token;
+  console.log("[HADE API] Sending Token:", token ? `${token.slice(0, 20)}...` : "NULL/UNDEFINED");
+  console.log("[HADE API] Request URL:", config.baseURL, config.url);
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
 });
 
-// On 401, clear auth state so the UI can redirect to login
+// On 401, clear auth state and sign out of Supabase
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (axios.isAxiosError(error) && error.response?.status === 401) {
+      supabase.auth.signOut();
       useSessionStore.getState().clearAuth();
     }
     return Promise.reject(error);
@@ -109,6 +113,13 @@ export async function dismissMoment(
   const { data } = await api.post<ApiResponse<Record<string, never>>>(
     `/moments/${momentId}/dismiss`,
   );
+  return data;
+}
+
+export async function postAuthSync(
+  params: { username?: string; name?: string },
+): Promise<ApiResponse<User>> {
+  const { data } = await api.post<ApiResponse<User>>("/auth/sync", params);
   return data;
 }
 

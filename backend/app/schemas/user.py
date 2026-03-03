@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 class UserResponse(BaseModel):
     id: UUID
+    username: str | None = None
     name: str
     home_city: str
     onboarding_complete: bool

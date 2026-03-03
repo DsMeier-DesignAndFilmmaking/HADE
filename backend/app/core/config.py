@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 60
+    supabase_jwt_secret: str = ""
+    supabase_auth_algorithm: str = "HS256"
 
     # External APIs
     google_places_api_key: str = ""

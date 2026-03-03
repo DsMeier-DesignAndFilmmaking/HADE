@@ -143,7 +143,9 @@ export default function LoginScreen(): React.JSX.Element {
           </View>
         )}
 
-        <Text style={styles.devHint}>Dev mode: OTP is always 000000</Text>
+        {__DEV__ && (
+          <Text style={styles.devHint}>Dev mode: OTP is always 000000</Text>
+        )}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
