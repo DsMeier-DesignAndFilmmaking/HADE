@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "HADE",
+    "slug": "hade",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "hade",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.hade.app",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "HADE needs your location to find the right spot nearby."
+      }
+    },
+    "android": {
+      "package": "com.hade.app",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ]
+    },
+    "plugins": [
+      "expo-location",
+      "expo-asset"
+    ]
+  }
+}

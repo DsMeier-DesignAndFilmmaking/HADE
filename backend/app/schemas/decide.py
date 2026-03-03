@@ -1,0 +1,35 @@
+from uuid import UUID
+
+from pydantic import BaseModel
+
+from app.schemas.common import GeoLocation
+
+
+class DecideRequest(BaseModel):
+    geo: GeoLocation
+    intent: str | None = None
+    group_size: int = 1
+    session_id: UUID | None = None
+
+
+class TrustAttribution(BaseModel):
+    user_name: str
+    signal_summary: str
+
+
+class OpportunityOut(BaseModel):
+    id: UUID
+    venue_name: str
+    category: str
+    distance_meters: int
+    eta_minutes: int
+    rationale: str
+    trust_attributions: list[TrustAttribution]
+    geo: GeoLocation
+    is_primary: bool
+
+
+class DecideResponse(BaseModel):
+    primary: OpportunityOut
+    fallbacks: list[OpportunityOut] = []
+    context_state_id: UUID

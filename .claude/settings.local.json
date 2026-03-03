@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/homebrew/opt/postgresql@17/bin/pg_isready:*)",
+      "Bash(/opt/homebrew/opt/postgresql@17/bin/psql:*)",
+      "Bash(python3:*)",
+      "Bash(source:*)",
+      "Bash(redis-cli ping:*)",
+      "Bash(curl:*)",
+      "Bash(ipconfig getifaddr:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(open:*)",
+      "Bash(lsof:*)",
+      "Bash(kill 32606:*)",
+      "Bash(npx expo:*)",
+      "Bash(xcrun simctl:*)",
+      "Bash(ls:*)",
+      "Bash(mkdir:*)",
+      "Bash(node:*)"
+    ]
+  }
+}

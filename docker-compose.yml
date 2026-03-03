@@ -1,0 +1,19 @@
+services:
+  postgres:
+    image: postgis/postgis:14-3.4
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: hade
+      POSTGRES_PASSWORD: hade
+      POSTGRES_DB: hade
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:
