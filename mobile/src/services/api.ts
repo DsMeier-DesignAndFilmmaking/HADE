@@ -5,6 +5,8 @@ import type {
   ApiResponse,
   DecideRequest,
   DecideResponse,
+  EventCreate,
+  EventResponse,
   Signal,
   SignalCreate,
   SignalNearbyResponse,
@@ -120,6 +122,50 @@ export async function postAuthSync(
   params: { username?: string; name?: string },
 ): Promise<ApiResponse<User>> {
   const { data } = await api.post<ApiResponse<User>>("/auth/sync", params);
+  return data;
+}
+
+// --- Micro Events ---
+
+export async function postEvent(
+  params: EventCreate,
+): Promise<ApiResponse<EventResponse>> {
+  const { data } = await api.post<ApiResponse<EventResponse>>("/events", params);
+  return data;
+}
+
+export async function getEvent(
+  eventId: string,
+): Promise<ApiResponse<EventResponse>> {
+  const { data } = await api.get<ApiResponse<EventResponse>>(`/events/${eventId}`);
+  return data;
+}
+
+export async function expressInterest(
+  eventId: string,
+): Promise<ApiResponse<EventResponse>> {
+  const { data } = await api.post<ApiResponse<EventResponse>>(`/events/${eventId}/in`);
+  return data;
+}
+
+export async function withdrawInterest(
+  eventId: string,
+): Promise<ApiResponse<EventResponse>> {
+  const { data } = await api.delete<ApiResponse<EventResponse>>(`/events/${eventId}/in`);
+  return data;
+}
+
+export async function cancelEvent(
+  eventId: string,
+): Promise<ApiResponse<EventResponse>> {
+  const { data } = await api.post<ApiResponse<EventResponse>>(`/events/${eventId}/cancel`);
+  return data;
+}
+
+export async function endEvent(
+  eventId: string,
+): Promise<ApiResponse<EventResponse>> {
+  const { data } = await api.post<ApiResponse<EventResponse>>(`/events/${eventId}/end`);
   return data;
 }
 

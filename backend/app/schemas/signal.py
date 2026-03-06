@@ -10,6 +10,7 @@ class SignalCreate(BaseModel):
     venue_id: UUID | None = None
     content: str | None = None
     geo: GeoLocation
+    vibe: str | None = None
 
 
 class SignalResponse(BaseModel):

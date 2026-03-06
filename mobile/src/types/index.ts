@@ -9,6 +9,7 @@ export interface User {
   id: string;
   username: string | null;
   name: string;
+  email: string | null;
   home_city: string;
   onboarding_complete: boolean;
   created_at: string;
@@ -20,7 +21,8 @@ export type SignalType =
   | "SOCIAL_RELAY"
   | "ENVIRONMENTAL"
   | "BEHAVIORAL"
-  | "AMBIENT";
+  | "AMBIENT"
+  | "EVENT";
 
 export interface Signal {
   id: string;
@@ -50,6 +52,24 @@ export interface TrustAttribution {
   signal_summary: string;
 }
 
+export interface PrimarySignal {
+  user_name: string;
+  timestamp: string;   // ISO 8601
+  vibe_label: string;  // "Busy/Great" | "Chill" | "Avoid"
+  comment: string;
+}
+
+export type SignalVibe = "fire" | "chill" | "avoid";
+
+export interface EventInfo {
+  event_id: string;
+  title: string;
+  host_name: string;
+  starts_at: string;
+  expires_at: string;
+  interest_count_hint: string | null;
+}
+
 export interface Opportunity {
   id: string;
   venue_name: string;
@@ -60,6 +80,8 @@ export interface Opportunity {
   trust_attributions: TrustAttribution[];
   geo: GeoLocation;
   is_primary: boolean;
+  event: EventInfo | null;
+  primary_signal: PrimarySignal | null;
 }
 
 export interface DecideResponse {
@@ -104,11 +126,14 @@ export interface SignalCreate {
   venue_id?: string | null;
   content?: string | null;
   geo: GeoLocation;
+  vibe?: SignalVibe;
 }
 
 export interface UserUpdate {
-  name?: string | null;
-  home_city?: string | null;
+  name?: string;           // Removed | null to fix TS(2345)
+  home_city?: string;      // Removed | null
+  username?: string;       // Added for Auth/Bypass
+  onboarding_complete?: boolean; // Added for Onboarding flow
 }
 
 // --- Response types (match Pydantic response schemas) ---
@@ -139,4 +164,39 @@ export interface ContextStateResponse {
   intent_declared: string | null;
   energy_inferred: EnergyLevel;
   session_id: string;
+}
+
+// --- Micro Events ---
+
+export type EventVisibility = "TRUST_NETWORK" | "EXTENDED" | "OPEN";
+export type EventStatus = "UPCOMING" | "LIVE" | "ENDED" | "CANCELLED";
+
+export interface EventCreate {
+  title: string;
+  note?: string | null;
+  category: string;
+  venue_id?: string | null;
+  geo: GeoLocation;
+  address?: string | null;
+  starts_at?: string | null;
+  duration_minutes?: number;
+  visibility?: EventVisibility;
+}
+
+export interface EventResponse {
+  id: string;
+  host_name: string;
+  host_username: string | null;
+  title: string;
+  note: string | null;
+  category: string;
+  venue_name: string | null;
+  geo: GeoLocation;
+  address: string | null;
+  starts_at: string;
+  expires_at: string;
+  status: EventStatus;
+  visibility: EventVisibility;
+  is_interested: boolean;
+  friend_interest_hint: string | null;
 }

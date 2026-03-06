@@ -79,6 +79,7 @@ async def sync_user(
             id=user.id,
             username=user.username,
             name=user.name,
+            email=user.email,
             home_city=user.home_city,
             onboarding_complete=user.onboarding_complete,
             created_at=user.created_at,

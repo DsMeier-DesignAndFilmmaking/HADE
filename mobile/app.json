@@ -6,24 +6,34 @@
     "orientation": "portrait",
     "scheme": "hade",
     "userInterfaceStyle": "dark",
-    "newArchEnabled": true,
+    "newArchEnabled": false,
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.hade.app",
+      "config": {
+        "googleMapsApiKey": "AIzaSyCq1zFRvMSJsWjwCXNN4G-A5-MFDZJs_R0"
+      },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "HADE needs your location to find the right spot nearby."
       }
     },
     "android": {
       "package": "com.hade.app",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyCq1zFRvMSJsWjwCXNN4G-A5-MFDZJs_R0"
+        }
+      },
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION"
       ]
     },
     "plugins": [
+      "expo-dev-client",
       "expo-location",
-      "expo-asset"
+      "expo-asset",
+      "expo-build-properties"
     ]
   }
 }

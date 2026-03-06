@@ -1,5 +1,6 @@
 """FastAPI dependencies for auth — dual JWT validation (dev HS256 + Supabase ES256 via JWKS)."""
 
+from dataclasses import dataclass
 import logging
 import time
 from uuid import UUID
@@ -25,6 +26,14 @@ bearer_scheme = HTTPBearer()
 _jwks_cache: dict[str, object] | None = None
 _jwks_fetched_at: float = 0.0
 _JWKS_TTL_SECONDS = 3600
+
+
+@dataclass(frozen=True)
+class AuthContext:
+    """Authenticated request context resolved from JWT claims."""
+
+    user_id: UUID
+    is_anonymous: bool = False
 
 
 async def _get_supabase_jwks() -> dict[str, object] | None:
@@ -73,8 +82,13 @@ def _try_decode_dev_jwt(token: str) -> UUID | None:
         return None
 
 
-async def _try_decode_supabase_jwt(token: str) -> tuple[str, str | None] | None:
-    """Decode a Supabase-issued ES256 JWT using the JWKS public key."""
+async def _try_decode_supabase_jwt(
+    token: str,
+) -> tuple[str, str | None, str | None, bool] | None:
+    """Decode a Supabase-issued ES256 JWT using the JWKS public key.
+
+    Returns ``(supabase_id, phone, email, is_anonymous)`` on success, or ``None``.
+    """
 
     # Peek at the token header
     try:
@@ -139,8 +153,15 @@ async def _try_decode_supabase_jwt(token: str) -> tuple[str, str | None] | None:
         return None
 
     phone: str | None = payload.get("phone")
-    print(f"[SUPABASE AUTH] SUCCESS — sub={sub}, phone={phone}")
-    return (sub, phone)
+    email: str | None = payload.get("email")
+    app_metadata = payload.get("app_metadata", {})
+    provider = app_metadata.get("provider") if isinstance(app_metadata, dict) else None
+    is_anonymous = bool(payload.get("is_anonymous", False) or provider == "anonymous")
+    print(
+        f"[SUPABASE AUTH] SUCCESS — sub={sub}, phone={phone}, email={email}, "
+        f"anonymous={is_anonymous}"
+    )
+    return (sub, phone, email, is_anonymous)
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +172,28 @@ async def _get_or_create_user_for_supabase(
     db: AsyncSession,
     supabase_id: str,
     phone: str | None,
+    email: str | None = None,
+    is_anonymous: bool = False,
 ) -> UUID:
-    """Look up a HADE user by ``supabase_id``, or auto-provision one."""
+    """Look up a HADE user by ``supabase_id``, or auto-provision one.
+
+    Supports both phone-based and email-based Supabase auth.
+    """
     # 1. Direct lookup by supabase_id
     result = await db.execute(select(User).where(User.supabase_id == supabase_id))
     user = result.scalar_one_or_none()
     if user is not None:
+        should_commit = False
+        # Back-fill email if it was missing (e.g. user upgraded from phone to email)
+        if email and not user.email:
+            user.email = email
+            should_commit = True
+        # Anonymous sessions are zero-input and should not be forced through onboarding.
+        if is_anonymous and not user.username:
+            user.onboarding_complete = True
+            should_commit = True
+        if should_commit:
+            await db.commit()
         return user.id
 
     # 2. Link by phone (existing dev-created user)
@@ -165,17 +202,64 @@ async def _get_or_create_user_for_supabase(
         user = result.scalar_one_or_none()
         if user is not None:
             user.supabase_id = supabase_id
+            if email and not user.email:
+                user.email = email
+            if is_anonymous and not user.username:
+                user.onboarding_complete = True
             await db.commit()
             logger.info("Linked supabase_id %s to existing user %s via phone", supabase_id, user.id)
             return user.id
 
-    # 3. Auto-provision new user
-    new_user = User(phone=phone or "", supabase_id=supabase_id)
+    # 3. Link by email (existing user who signed up with email)
+    if email:
+        result = await db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+        if user is not None:
+            user.supabase_id = supabase_id
+            if is_anonymous and not user.username:
+                user.onboarding_complete = True
+            await db.commit()
+            logger.info("Linked supabase_id %s to existing user %s via email", supabase_id, user.id)
+            return user.id
+
+    # 4. Auto-provision new user
+    # phone and email are nullable — only set them if actually provided
+    new_user = User(
+        phone=phone or None,
+        email=email or None,
+        supabase_id=supabase_id,
+        onboarding_complete=is_anonymous,
+    )
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
     logger.info("Auto-provisioned user %s for supabase_id %s", new_user.id, supabase_id)
     return new_user.id
+
+
+async def _resolve_auth_context(token: str, db: AsyncSession) -> AuthContext | None:
+    """Resolve request auth context from either dev JWT or Supabase JWT."""
+    dev_user_id = _try_decode_dev_jwt(token)
+    if dev_user_id is not None:
+        print(f"[AUTH] Dev JWT matched — user_id={dev_user_id}")
+        return AuthContext(user_id=dev_user_id, is_anonymous=False)
+
+    print("[AUTH] Dev JWT did not match, trying Supabase JWT (ES256 via JWKS)...")
+    supabase_result = await _try_decode_supabase_jwt(token)
+    if supabase_result is None:
+        return None
+
+    supabase_id, phone, email, is_anonymous = supabase_result
+    print("[AUTH] Supabase JWT matched — provisioning HADE user...")
+    hade_user_id = await _get_or_create_user_for_supabase(
+        db,
+        supabase_id=supabase_id,
+        phone=phone,
+        email=email,
+        is_anonymous=is_anonymous,
+    )
+    print(f"[AUTH] HADE user_id={hade_user_id}, anonymous={is_anonymous}")
+    return AuthContext(user_id=hade_user_id, is_anonymous=is_anonymous)
 
 
 # ---------------------------------------------------------------------------
@@ -195,22 +279,29 @@ async def get_current_user_id(
     print(f"\n[AUTH] === get_current_user_id called ===")
     print(f"[AUTH] Incoming Token: {token[:20]}...")
 
-    # Dev JWT
-    dev_user_id = _try_decode_dev_jwt(token)
-    if dev_user_id is not None:
-        print(f"[AUTH] Dev JWT matched — user_id={dev_user_id}")
-        return dev_user_id
+    auth_context = await _resolve_auth_context(token, db)
+    if auth_context is not None:
+        return auth_context.user_id
 
-    print("[AUTH] Dev JWT did not match, trying Supabase JWT (ES256 via JWKS)...")
+    print("[AUTH] Both dev and Supabase JWT failed — returning 401")
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid or expired token",
+    )
 
-    # Supabase JWT
-    supabase_result = await _try_decode_supabase_jwt(token)
-    if supabase_result is not None:
-        supabase_id, phone = supabase_result
-        print(f"[AUTH] Supabase JWT matched — provisioning HADE user...")
-        hade_user_id = await _get_or_create_user_for_supabase(db, supabase_id, phone)
-        print(f"[AUTH] HADE user_id={hade_user_id}")
-        return hade_user_id
+
+async def get_current_auth_context(
+    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    db: AsyncSession = Depends(get_db),
+) -> AuthContext:
+    """Validate JWT and return resolved auth context (including anonymous flag)."""
+    token = credentials.credentials
+    print(f"\n[AUTH] === get_current_auth_context called ===")
+    print(f"[AUTH] Incoming Token: {token[:20]}...")
+
+    auth_context = await _resolve_auth_context(token, db)
+    if auth_context is not None:
+        return auth_context
 
     print("[AUTH] Both dev and Supabase JWT failed — returning 401")
     raise HTTPException(

@@ -28,7 +28,9 @@ async def get_me(
         status="ok",
         data=UserResponse(
             id=user.id,
+            username=user.username,
             name=user.name,
+            email=user.email,
             home_city=user.home_city,
             onboarding_complete=user.onboarding_complete,
             created_at=user.created_at,
@@ -62,7 +64,9 @@ async def update_me(
         status="ok",
         data=UserResponse(
             id=user.id,
+            username=user.username,
             name=user.name,
+            email=user.email,
             home_city=user.home_city,
             onboarding_complete=user.onboarding_complete,
             created_at=user.created_at,

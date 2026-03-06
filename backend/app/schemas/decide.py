@@ -1,8 +1,10 @@
+from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel
 
 from app.schemas.common import GeoLocation
+from app.schemas.event import EventInfo
 
 
 class DecideRequest(BaseModel):
@@ -17,6 +19,13 @@ class TrustAttribution(BaseModel):
     signal_summary: str
 
 
+class PrimarySignal(BaseModel):
+    user_name: str
+    timestamp: datetime
+    vibe_label: str
+    comment: str
+
+
 class OpportunityOut(BaseModel):
     id: UUID
     venue_name: str
@@ -27,6 +36,8 @@ class OpportunityOut(BaseModel):
     trust_attributions: list[TrustAttribution]
     geo: GeoLocation
     is_primary: bool
+    event: EventInfo | None = None
+    primary_signal: PrimarySignal | None = None
 
 
 class DecideResponse(BaseModel):

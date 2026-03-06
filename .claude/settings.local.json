@@ -26,7 +26,18 @@
       "Bash(find .:*)",
       "Bash(pkill:*)",
       "Bash(npm audit:*)",
-      "Bash(uvicorn app.main:app:*)"
+      "Bash(uvicorn app.main:app:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(xargs kill -9)",
+      "Bash(xcodebuild -version)",
+      "Bash(ruby --version)",
+      "Bash(gem list cocoapods)",
+      "Bash(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install --project-directory=/Users/danielmeier/Documents/GitHub/HADE/mobile/ios)",
+      "Bash(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 pod install)",
+      "Bash(xcodebuild -workspace HADE.xcworkspace -scheme HADE -sdk iphonesimulator -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' build)",
+      "Bash(xcodebuild -workspace HADE.xcworkspace -scheme HADE -sdk iphonesimulator -configuration Debug -destination 'id=CC5909A8-0325-432E-BDCA-286EEF3D55BA' build)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(echo \"Migration applied: $?\")"
     ]
   }
 }

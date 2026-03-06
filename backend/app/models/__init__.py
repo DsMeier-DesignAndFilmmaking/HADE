@@ -5,6 +5,8 @@ from app.models.context_state import ContextState
 from app.models.opportunity import Opportunity
 from app.models.trust_score import TrustScore
 from app.models.moment import Moment
+from app.models.micro_event import MicroEvent, EventInterest
+from app.models.business_account import BusinessAccount
 
 __all__ = [
     "User",
@@ -15,4 +17,7 @@ __all__ = [
     "Opportunity",
     "TrustScore",
     "Moment",
+    "MicroEvent",
+    "EventInterest",
+    "BusinessAccount",
 ]

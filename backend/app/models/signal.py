@@ -16,6 +16,7 @@ class SignalType(str, enum.Enum):
     ENVIRONMENTAL = "ENVIRONMENTAL"
     BEHAVIORAL = "BEHAVIORAL"
     AMBIENT = "AMBIENT"
+    EVENT = "EVENT"
 
 
 class Signal(Base):
@@ -30,3 +31,4 @@ class Signal(Base):
     emitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     geo: Mapped[str] = mapped_column(Geography(geometry_type="POINT", srid=4326))
+    event_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("micro_events.id"), nullable=True)

@@ -8,6 +8,7 @@ class UserResponse(BaseModel):
     id: UUID
     username: str | None = None
     name: str
+    email: str | None = None
     home_city: str
     onboarding_complete: bool
     created_at: datetime
