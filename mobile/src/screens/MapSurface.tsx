@@ -32,7 +32,6 @@ function isIosSimulator(): boolean {
   if (typeof ExpoDeviceModule?.isDevice === "boolean") {
     return !ExpoDeviceModule.isDevice;
   }
-  // Fallback heuristic when expo-device is not installed.
   return __DEV__;
 }
 
@@ -113,8 +112,7 @@ export default function MapSurface(): React.JSX.Element {
   const route = useRoute<any>();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
-  const [providerOverride, setProviderOverride] =
-    useState<MapProviderOverride>("auto");
+  const [providerOverride, setProviderOverride] = useState<MapProviderOverride>("auto");
 
   const decisionPrimary = useDecisionStore((s) => s.decision?.primary);
   const decisionFallbacks = useDecisionStore((s) => s.decision?.fallbacks ?? EMPTY_FALLBACKS);
@@ -126,24 +124,24 @@ export default function MapSurface(): React.JSX.Element {
   const [userPoint, setUserPoint] = useState<any>(null);
   const viewportRef = useRef<MapViewport>(FALLBACK_VIEWPORT);
   const isAnimatingRef = useRef(false);
+
   const mapProvider = useMemo(() => {
     if (providerOverride === "apple") return undefined;
     if (providerOverride === "google") return PROVIDER_GOOGLE;
-
     if (Platform.OS !== "ios") return PROVIDER_GOOGLE;
     return isIosSimulator() ? undefined : PROVIDER_GOOGLE;
   }, [providerOverride]);
+
   const isGoogleProvider = mapProvider === PROVIDER_GOOGLE;
 
+  // Load provider override
   useEffect(() => {
     let mounted = true;
     (async () => {
       const override = await getMapProviderOverride();
       if (mounted) setProviderOverride(override);
     })();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
   const commitViewport = useCallback((nextRegion: MapViewport) => {
@@ -154,6 +152,7 @@ export default function MapSurface(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, [setLastMapViewport]);
 
+  // Handle focusing on an Opportunity (Signal)
   useEffect(() => {
     if (!opportunity?.geo) return;
     const target: MapViewport = {
@@ -169,20 +168,44 @@ export default function MapSurface(): React.JSX.Element {
     return () => clearTimeout(timer);
   }, [opportunityId]);
 
+  // Handle live location watching (The Simulator Austin Fix)
   useEffect(() => {
+    let subscription: Location.LocationSubscription | null = null;
+    let isFirstFix = true; // NEW: Track the first time we get a location
+
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") return;
-      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      setUserPoint(coords);
-      if (!opportunity) {
-        isAnimatingRef.current = true;
-        mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 1000);
-        setTimeout(() => { isAnimatingRef.current = false; }, 1200);
-      }
+
+      subscription = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 1000,
+          distanceInterval: 1,
+        },
+        (location) => {
+          const coords = { 
+            latitude: location.coords.latitude, 
+            longitude: location.coords.longitude 
+          };
+          
+          setUserPoint(coords);
+
+          // Force the map to Austin if it's the first time we're getting data
+          if ((isFirstFix || !opportunity) && !isAnimatingRef.current) {
+            mapRef.current?.animateToRegion({
+              ...coords,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01
+            }, isFirstFix ? 0 : 1000); // 0ms for instant jump on boot
+            isFirstFix = false; 
+          }
+        }
+      );
     })();
-  }, []);
+
+    return () => subscription?.remove();
+  }, [opportunityId]);
 
   return (
     <View style={styles.container}>
@@ -190,11 +213,11 @@ export default function MapSurface(): React.JSX.Element {
         ref={mapRef}
         style={styles.map}
         provider={mapProvider}
-        initialRegion={viewportRef.current}
-        // NEW: Forces Apple Maps into Dark Mode to match HADE branding
+        // Change: Use the userPoint if we have it, otherwise fallback
+        initialRegion={userPoint ? { ...userPoint, latitudeDelta: 0.01, longitudeDelta: 0.01 } : viewportRef.current}
         userInterfaceStyle="dark" 
-        customMapStyle={isGoogleProvider ? HADE_MAP_STYLE : undefined}
         showsUserLocation={true}
+        followsUserLocation={true} // Forces the camera to the puck on boot
         onRegionChangeComplete={commitViewport}
       >
         {opportunity && (
