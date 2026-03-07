@@ -41,6 +41,7 @@ def _wkt_point(lat: float, lng: float) -> str:
 )
 async def emit_signal(
     payload: SignalCreate,
+    # Returns the HADE users.id UUID (not Supabase auth.users.sub).
     user_id: UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[SignalResponse]:

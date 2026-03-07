@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { StatusBar } from "expo-status-bar";
 import { NavigationContainer } from "@react-navigation/native";
+import { navigationRef } from './src/lib/navigationRef';
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
@@ -66,12 +67,13 @@ export default function App(): React.JSX.Element {
   }, []);
 
   // Sync user profile from backend after Supabase auth is confirmed.
-  // Falls back to Supabase metadata when backend is unreachable (dev mode).
   useEffect(() => {
     if (!isAuthenticated || user !== null) return;
 
+    const currentRoute = navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : null;
+    if (currentRoute === "Auth") return;
+
     const syncUser = async () => {
-      // 1. Try backend
       try {
         const resp = await postAuthSync({});
         if (resp.data) {
@@ -82,7 +84,6 @@ export default function App(): React.JSX.Element {
         console.warn("[App] Backend sync failed — attempting Supabase metadata fallback");
       }
 
-      // 2. Fallback: build user from Supabase auth metadata
       try {
         const { data: { user: supaUser } } = await supabase.auth.getUser();
         if (supaUser) {
@@ -102,85 +103,83 @@ export default function App(): React.JSX.Element {
           useSessionStore.getState().setUser(localUser);
         }
       } catch (err) {
-        console.warn("[App] Supabase metadata fallback failed:", err);
+        console.warn("[App] Backend sync failed at:", process.env.EXPO_PUBLIC_API_URL, err);
       }
     };
 
     syncUser();
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, user, navigationRef.isReady()]);
 
-  /**
-   * REFINED NAVIGATION LOGIC
-   * 1. If no user exists (real or mock) -> Auth.
-   * 2. If user exists but onboarding is incomplete -> Onboarding.
-   * 3. If user exists and onboarding is done -> Home stack.
-   */
   const hasUser = user !== null;
   const showHome = hasUser && user.onboarding_complete;
   const showOnboarding = hasUser && !user.onboarding_complete;
-  const waitingForUserSync = authBootstrapComplete && isAuthenticated && !hasUser;
+
+  const waitingForUserSync = authBootstrapComplete && isAuthenticated && !hasUser && !__DEV__;
 
   if (!authBootstrapComplete || waitingForUserSync) {
     return (
-      <>
-        <StatusBar style="light" />
-        <QueryClientProvider client={queryClient}>
-          <View style={styles.bootstrapContainer}>
-            <ActivityIndicator size="small" color="#F59E0B" />
-          </View>
-        </QueryClientProvider>
-      </>
+      <View style={styles.bootstrapContainer}>
+        <ActivityIndicator size="small" color="#F59E0B" />
+      </View>
     );
   }
 
   return (
-    <>
+    <QueryClientProvider client={queryClient}>
       <StatusBar style="light" />
-      <QueryClientProvider client={queryClient}>
-        <NavigationContainer>
-          <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
-            {showHome ? (
-              <Stack.Group>
-                <Stack.Screen name="Home" component={DecideScreen} />
-                <Stack.Screen name="CheckIn" component={CheckInScreen} />
-                <Stack.Screen name="Profile" component={ProfileScreen} />
-                <Stack.Screen name="RecommendationDetail" component={RecommendationDetailScreen} />
-                <Stack.Screen
-                  name="MapSurface"
-                  component={MapSurface}
-                  options={{ animation: "slide_from_bottom" }}
+      <NavigationContainer ref={navigationRef}>
+        <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+          {showHome ? (
+            <Stack.Group>
+              <Stack.Screen name="Home" component={DecideScreen} />
+              <Stack.Screen name="CheckIn" component={CheckInScreen} />
+              <Stack.Screen name="Profile" component={ProfileScreen} />
+              <Stack.Screen name="RecommendationDetail" component={RecommendationDetailScreen} />
+              
+              {/* AUDIT FIX: Resolved 'pointerEvents' / box-none error on iOS Simulator.
+                  By explicitly setting headerShown: false and using fullScreenModal 
+                  presentation, we prevent the native-stack from attempting to 
+                  attach header configuration properties that MapView's parent 
+                  UIView cannot process.
+              */}
+              <Stack.Screen
+                name="MapSurface"
+                component={MapSurface}
+                options={{ 
+                  animation: "slide_from_bottom",
+                  headerShown: false,
+                  presentation: 'fullScreenModal',
+                  gestureEnabled: false // Prevents gesture-nav interference with Map drag
+                }}
+              />
+              
+              <Stack.Screen name="TrustNetwork" component={TrustNetworkScreen} />
+              <Stack.Screen name="Debug" component={DebugScreen} />
+            </Stack.Group>
+          ) : showOnboarding ? (
+            <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+          ) : (
+            <Stack.Screen name="Auth">
+              {(props) => (
+                <AuthScreen
+                  {...props}
+                  onBypass={() => {
+                    useSessionStore.getState().setUser({
+                      id: "dev-user-id",
+                      username: "daniel_meier",
+                      name: "Daniel",
+                      onboarding_complete: false,
+                    } as any);
+                  }}
                 />
-                <Stack.Screen name="TrustNetwork" component={TrustNetworkScreen} />
-                <Stack.Screen name="Debug" component={DebugScreen} />
-              </Stack.Group>
-            ) : showOnboarding ? (
-              <Stack.Screen name="Onboarding" component={OnboardingScreen} />
-            ) : (
-              <Stack.Screen name="Auth">
-                {(props) => (
-                  <AuthScreen
-                    {...props}
-                    onBypass={() => {
-                      // Injecting mock user with onboarding_complete: false
-                      // forces the app into the Onboarding flow.
-                      useSessionStore.getState().setUser({
-                        id: "dev-user-id",
-                        username: "daniel_meier",
-                        name: "Daniel",
-                        onboarding_complete: false,
-                      } as any);
-                    }}
-                  />
-                )}
-              </Stack.Screen>
-            )}
-          </Stack.Navigator>
+              )}
+            </Stack.Screen>
+          )}
+        </Stack.Navigator>
 
-          {/* Floating Dev Menu: Active only in __DEV__ mode */}
-          <DevNavOverlay />
-        </NavigationContainer>
-      </QueryClientProvider>
-    </>
+        <DevNavOverlay />
+      </NavigationContainer>
+    </QueryClientProvider>
   );
 }
 

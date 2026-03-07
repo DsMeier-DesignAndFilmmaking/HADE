@@ -31,9 +31,15 @@ target 'HADE' do
     ]
   end
 
-# @generated begin react-native-maps - expo prebuild (DO NOT MODIFY) sync-e9cc66c360abe50bc66d89fffb3c55b034d7d369
+  # --- GOOGLE MAPS CONFIGURATION ---
+  # Linking the core map engine
   pod 'react-native-google-maps', path: File.dirname(`node --print "require.resolve('react-native-maps/package.json')"`)
-# @generated end react-native-maps
+  
+  # FIX: Resolves "Undefined symbol: _OBJC_CLASS_$_GMU..." errors
+  # This provides the Heatmap, Gradient, and KML utilities required by react-native-maps
+  pod 'Google-Maps-iOS-Utils', '4.2.2'
+  # ---------------------------------
+  
   config = use_native_modules!(config_command)
 
   use_frameworks! :linkage => podfile_properties['ios.useFrameworks'].to_sym if podfile_properties['ios.useFrameworks']
@@ -42,12 +48,12 @@ target 'HADE' do
   use_react_native!(
     :path => config[:reactNativePath],
     :hermes_enabled => podfile_properties['expo.jsEngine'] == nil || podfile_properties['expo.jsEngine'] == 'hermes',
-    # An absolute path to your application root.
     :app_path => "#{Pod::Config.instance.installation_root}/..",
     :privacy_file_aggregation_enabled => podfile_properties['apple.privacyManifestAggregationEnabled'] != 'false',
   )
 
   post_install do |installer|
+    # 1. Standard React Native Post Install
     react_native_post_install(
       installer,
       config[:reactNativePath],
@@ -55,8 +61,29 @@ target 'HADE' do
       :ccache_enabled => podfile_properties['apple.ccacheEnabled'] == 'true',
     )
 
-    # This is necessary for Xcode 14, because it signs resource bundles by default
-    # when building for devices.
+    # 2. HADE Infrastructure Fixes
+    module_warning_targets = ['expo-dev-menu', 'SafeAreaView', 'Vendored']
+    google_simulator_targets = ['GoogleMaps', 'Google-Maps-iOS-Utils']
+
+    # 2. HADE Custom Infrastructure & Module Fixes
+    installer.pods_project.targets.each do |target|
+      target.build_configurations.each do |config|
+        
+        config.build_settings['DEFINES_MODULE'] = 'YES'
+        config.build_settings['CODE_SIGNING_ALLOWED'] = 'NO'
+
+        # THE FINAL FIX:
+        # 1. Force the simulator to use arm64 (Apple Silicon)
+        # 2. Prevent the fallback to x86_64 which causes the linker error
+        if target.name.include?('GoogleMaps') || target.name.include?('Google-Maps-iOS-Utils')
+          config.build_settings['SDKROOT'] = 'iphoneos' # Force iOS SDK
+          config.build_settings['ONLY_ACTIVE_ARCH'] = 'YES'
+          config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+        end
+      end
+    end
+
+    # 3. Explicit Resource Bundle Signing Overrides
     installer.target_installation_results.pod_target_installation_results
       .each do |pod_name, target_installation_result|
       target_installation_result.resource_bundle_targets.each do |resource_bundle_target|

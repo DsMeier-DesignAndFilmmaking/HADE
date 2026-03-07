@@ -17,7 +17,7 @@ class SignalResponse(BaseModel):
     id: UUID
     type: str
     venue_id: UUID | None
-    content: str | None
+    content: dict | str | None = None
     strength: float
     emitted_at: datetime
     expires_at: datetime

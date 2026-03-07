@@ -1,24 +1,43 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Animated,
-  Dimensions,
+  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
-import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 import * as Location from "expo-location";
 import type { Opportunity } from "../types";
 import { useDecisionStore, type MapViewport } from "../store/useDecisionStore";
 import SignalDropFAB from "../components/SignalDropFAB";
+import {
+  getMapProviderOverride,
+  type MapProviderOverride,
+} from "../lib/mapProviderOverride";
 
-/** Stable empty array to prevent useSyncExternalStore snapshot instability. */
+const ExpoDeviceModule = (() => {
+  try {
+    return require("expo-device") as { isDevice?: boolean };
+  } catch {
+    return null;
+  }
+})();
+
+function isIosSimulator(): boolean {
+  if (Platform.OS !== "ios") return false;
+  if (typeof ExpoDeviceModule?.isDevice === "boolean") {
+    return !ExpoDeviceModule.isDevice;
+  }
+  // Fallback heuristic when expo-device is not installed.
+  return __DEV__;
+}
+
 const EMPTY_FALLBACKS: Opportunity[] = [];
 
-// --- Logic Helpers ---
 const FALLBACK_VIEWPORT: MapViewport = {
   latitude: 39.7541,
   longitude: -104.9998,
@@ -39,7 +58,6 @@ function isSameViewport(a: MapViewport, b: MapViewport): boolean {
 const ReanimatedLib = (() => {
   try { return require("react-native-reanimated"); } catch { return null; }
 })();
-
 const hasReanimatedPulse = Boolean(ReanimatedLib?.default && ReanimatedLib?.useSharedValue);
 
 function ReanimatedPulseMarker(): React.JSX.Element {
@@ -90,14 +108,14 @@ function HadePulseMarker() {
   return hasReanimatedPulse ? <ReanimatedPulseMarker /> : <AnimatedPulseFallbackMarker />;
 }
 
-// --- Main Map Component ---
 export default function MapSurface(): React.JSX.Element {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
   const insets = useSafeAreaInsets();
   const mapRef = useRef<MapView | null>(null);
+  const [providerOverride, setProviderOverride] =
+    useState<MapProviderOverride>("auto");
 
-  // Store & State
   const decisionPrimary = useDecisionStore((s) => s.decision?.primary);
   const decisionFallbacks = useDecisionStore((s) => s.decision?.fallbacks ?? EMPTY_FALLBACKS);
   const setLastMapViewport = useDecisionStore((s) => s.setLastMapViewport);
@@ -107,44 +125,62 @@ export default function MapSurface(): React.JSX.Element {
 
   const [userPoint, setUserPoint] = useState<any>(null);
   const viewportRef = useRef<MapViewport>(FALLBACK_VIEWPORT);
+  const isAnimatingRef = useRef(false);
+  const mapProvider = useMemo(() => {
+    if (providerOverride === "apple") return undefined;
+    if (providerOverride === "google") return PROVIDER_GOOGLE;
 
-  // 1. Decoupled Viewport Sync
+    if (Platform.OS !== "ios") return PROVIDER_GOOGLE;
+    return isIosSimulator() ? undefined : PROVIDER_GOOGLE;
+  }, [providerOverride]);
+  const isGoogleProvider = mapProvider === PROVIDER_GOOGLE;
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      const override = await getMapProviderOverride();
+      if (mounted) setProviderOverride(override);
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
   const commitViewport = useCallback((nextRegion: MapViewport) => {
+    if (isAnimatingRef.current) return;
     if (isSameViewport(viewportRef.current, nextRegion)) return;
     viewportRef.current = nextRegion;
-    
-    // Push store update to next tick to break render loop
-    requestAnimationFrame(() => {
-      setLastMapViewport(nextRegion);
-    });
+    const timer = setTimeout(() => { setLastMapViewport(nextRegion); }, 400);
+    return () => clearTimeout(timer);
   }, [setLastMapViewport]);
 
-  // 2. Fly to Destination (Triggered ONLY by ID change)
   useEffect(() => {
     if (!opportunity?.geo) return;
-
     const target: MapViewport = {
       latitude: opportunity.geo.lat,
       longitude: opportunity.geo.lng,
       latitudeDelta: 0.005,
       longitudeDelta: 0.005,
     };
-
     viewportRef.current = target;
+    isAnimatingRef.current = true;
     mapRef.current?.animateToRegion(target, 1000);
+    const timer = setTimeout(() => { isAnimatingRef.current = false; }, 1200);
+    return () => clearTimeout(timer);
   }, [opportunityId]);
 
-  // 3. Initial GPS Lock
   useEffect(() => {
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") return;
-      
-      const pos = await Location.getCurrentPositionAsync({});
+      const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const coords = { latitude: pos.coords.latitude, longitude: pos.coords.longitude };
-      
       setUserPoint(coords);
-      mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 1000);
+      if (!opportunity) {
+        isAnimatingRef.current = true;
+        mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 1000);
+        setTimeout(() => { isAnimatingRef.current = false; }, 1200);
+      }
     })();
   }, []);
 
@@ -153,19 +189,18 @@ export default function MapSurface(): React.JSX.Element {
       <MapView
         ref={mapRef}
         style={styles.map}
-        provider={PROVIDER_GOOGLE}
+        provider={mapProvider}
         initialRegion={viewportRef.current}
-        customMapStyle={HADE_MAP_STYLE}
-        showsUserLocation
+        // NEW: Forces Apple Maps into Dark Mode to match HADE branding
+        userInterfaceStyle="dark" 
+        customMapStyle={isGoogleProvider ? HADE_MAP_STYLE : undefined}
+        showsUserLocation={true}
         onRegionChangeComplete={commitViewport}
       >
         {opportunity && (
           <Marker
             key={`main-${opportunityId}`}
-            coordinate={{
-              latitude: opportunity.geo.lat,
-              longitude: opportunity.geo.lng,
-            }}
+            coordinate={{ latitude: opportunity.geo.lat, longitude: opportunity.geo.lng }}
           >
             <HadePulseMarker />
           </Marker>
@@ -174,10 +209,7 @@ export default function MapSurface(): React.JSX.Element {
         {decisionFallbacks.slice(0, 3).map((fb) => (
           <Marker
             key={`fb-${fb.id}`}
-            coordinate={{
-              latitude: fb.geo.lat,
-              longitude: fb.geo.lng,
-            }}
+            coordinate={{ latitude: fb.geo.lat, longitude: fb.geo.lng }}
             opacity={0.4}
             pinColor="#78716C"
           />

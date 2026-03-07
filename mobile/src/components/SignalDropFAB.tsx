@@ -42,39 +42,50 @@ interface OptimisticSnapshot {
 const UUID_V4_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-async function resolveSignalGeo(
-  fallbackGeo: { lat: number; lng: number },
-): Promise<{ lat: number; lng: number }> {
-  try {
-    const existing = await Location.getForegroundPermissionsAsync();
-    let status = existing.status;
-    if (status !== "granted") {
-      const requested = await Location.requestForegroundPermissionsAsync();
-      status = requested.status;
-    }
-    if (status !== "granted") {
+  async function resolveSignalGeo(
+    fallbackGeo: { lat: number; lng: number },
+  ): Promise<{ lat: number; lng: number }> {
+    try {
+      const existing = await Location.getForegroundPermissionsAsync();
+      let status = existing.status;
+      if (status !== "granted") {
+        const requested = await Location.requestForegroundPermissionsAsync();
+        status = requested.status;
+      }
+      if (status !== "granted") return fallbackGeo;
+  
+      // 1. Check for "Fresh" Last Known Position (The High-Speed Path)
+      const lastKnown = await Location.getLastKnownPositionAsync();
+      if (lastKnown?.coords) {
+        const ageInSeconds = (Date.now() - lastKnown.timestamp) / 1000;
+        // If the location is less than 60 seconds old, it's perfect for a quick signal drop
+        if (ageInSeconds < 2) {
+          return {
+            lat: lastKnown.coords.latitude,
+            lng: lastKnown.coords.longitude,
+          };
+        }
+      }
+  
+      // 2. Fallback to Current Position with a Strict 5-Second Timeout
+      // This prevents the "Signal Drop" from hanging if the user is in a GPS dead zone
+      const current = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+        // Note: timeInterval/timeout prevents the UI from locking up 
+        // while the hardware tries to find a satellite.
+      });
+  
+      return {
+        lat: current.coords.latitude,
+        lng: current.coords.longitude,
+      };
+    } catch (error) {
+      // If anything fails (timeout, hardware busy), we use the Opportunity's known Geo
+      // ensuring the signal is at least associated with the venue.
+      console.log("Location resolution timed out or failed, using fallbackGeo");
       return fallbackGeo;
     }
-
-    const lastKnown = await Location.getLastKnownPositionAsync();
-    if (lastKnown?.coords) {
-      return {
-        lat: lastKnown.coords.latitude,
-        lng: lastKnown.coords.longitude,
-      };
-    }
-
-    const current = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.Balanced,
-    });
-    return {
-      lat: current.coords.latitude,
-      lng: current.coords.longitude,
-    };
-  } catch {
-    return fallbackGeo;
   }
-}
 
 function toUuidOrNull(value: string): string | null {
   return UUID_V4_PATTERN.test(value) ? value : null;
@@ -126,6 +137,8 @@ export default function SignalDropFAB({ opportunity }: SignalDropFABProps): Reac
     venueId,
     fallbackGeo,
   }: SignalSubmission): Promise<void> => {
+    console.log("🔥 [DEBUG] submitSignal started", { vibe, venueId }); // ADD THIS
+    
     const prev = useDecisionStore.getState();
     const snapshot: OptimisticSnapshot = {
       blockedVenueIds: prev.blockedVenueIds,
@@ -134,20 +147,28 @@ export default function SignalDropFAB({ opportunity }: SignalDropFABProps): Reac
       lastMapViewport: prev.lastMapViewport,
     };
 
-    // Optimistic update: immediately reflect a shared signal in UI state.
     registerSignalFeedback(venueId, vibe);
     setOpen(false);
     setSendingVibe(vibe);
+    
+    // Move this logic to ONLY show success if it actually succeeds later, 
+    // or keep it here but know it's "Optimistic".
     showConfirmation("Signal Shared");
 
     try {
+      console.log("📍 [DEBUG] Resolving Geo..."); // ADD THIS
       const geo = await resolveSignalGeo(fallbackGeo);
+      console.log("📡 [DEBUG] Emitting Signal to Backend...", geo); // ADD THIS
+      
       await emitSignal.mutateAsync({
         venue_id: toUuidOrNull(venueId),
         geo,
         vibe,
       });
-    } catch {
+      
+      console.log("✅ [DEBUG] Backend Accepted Signal!"); // ADD THIS
+    } catch (error) {
+      console.log("❌ [DEBUG] Signal Submission Failed:", error); // ADD THIS
       rollbackOptimisticState(snapshot);
       showConfirmation("Signal failed. Try again.");
     } finally {

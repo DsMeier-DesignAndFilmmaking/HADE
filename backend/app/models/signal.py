@@ -23,7 +23,13 @@ class Signal(Base):
     __tablename__ = "signals"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    type: Mapped[SignalType] = mapped_column(Enum(SignalType))
+    type: Mapped[SignalType] = mapped_column(
+        Enum(
+            SignalType,
+            name="signaltype",
+            validate_strings=True,
+        )
+    )
     source_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     venue_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("venues.id"), nullable=True)
     content: Mapped[str | None] = mapped_column(String, nullable=True)

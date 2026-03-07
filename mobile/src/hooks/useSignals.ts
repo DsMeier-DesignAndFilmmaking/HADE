@@ -88,28 +88,55 @@ function mapSignalRow(row: SignalRow, fallbackGeo: GeoLocation): Signal {
 }
 
 async function insertSignal(payload: SignalCreate): Promise<Signal> {
+  // 1. Ensure we have a valid session
   await ensureSupabaseSession();
+  const { data: { session } } = await supabase.auth.getSession();
 
-  const args: InsertSignalWithLocationArgs = {
-    p_venue_id: payload.venue_id ?? null,
-    p_content: payload.content ?? null,
-    p_vibe: payload.vibe ?? null,
-    p_location_expr: toPostgisPointExpression(payload.geo),
-  };
+  // 2. Align with your Python 'SignalCreate' Pydantic schema
+// Match the Python 'SignalCreate' schema exactly
+const body = {
+  venue_id: payload.venue_id,
+  vibe: payload.vibe || "fire",
+  geo: {
+    lat: payload.geo.lat,
+    lng: payload.geo.lng
+  },
+  // Fix: Send null if empty, or stringify if it's an object
+  content: !payload.content || Object.keys(payload.content).length === 0 
+    ? null 
+    : typeof payload.content === 'string' 
+      ? payload.content 
+      : JSON.stringify(payload.content)
+};
 
-  const { data, error } = await supabase.rpc("insert_signal_with_location", args);
-  if (error) {
-    throw new Error(error.message);
-  }
-  if (!Array.isArray(data) || data.length === 0) {
-    throw new Error("Signal insert returned no row");
-  }
-  const inserted = data[0];
-  if (!inserted) {
-    throw new Error("Signal insert returned an empty payload");
+  // 3. Construct the URL with the mandatory api/v1 prefix
+  // We use .replace() to ensure we don't accidentally get double slashes //
+  const baseUrl = (process.env.EXPO_PUBLIC_API_URL || "")
+    .replace(/\s+/g, "")
+    .replace(/\/+$/, "");
+  const finalUrl = `${baseUrl}/api/v1/signals`.replace(/([^:]\/)\/+/g, "$1");
+
+  const response = await fetch(finalUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${session?.access_token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    // Logging this to Metro so you can see the exact Python error if it's a 422
+    console.error("Signal Post Error:", errorText);
+    throw new Error(`Backend Error (${response.status}): ${errorText}`);
   }
 
-  return mapSignalRow(inserted, payload.geo);
+  const result = await response.json();
+  
+  // Since your backend returns ApiResponse[SignalResponse], 
+  // we need to pass 'result.data' to the mapper
+  return mapSignalRow(result.data, payload.geo);
 }
 
 export function useNearbySignals(
