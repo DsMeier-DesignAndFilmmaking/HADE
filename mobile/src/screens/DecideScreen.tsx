@@ -36,6 +36,9 @@ const Haptics = (() => {
 export default function DecideScreen(): React.JSX.Element {
   const { location } = useLocation();
   const user = useSessionStore((s) => s.user);
+
+  const llmProvider = useSessionStore((s) => s.llmProvider);
+
   const navigation = useNavigation<any>();
 
   // Corrected store hook names to avoid TS errors
@@ -140,11 +143,8 @@ export default function DecideScreen(): React.JSX.Element {
     async (selectedIntent: Intent) => {
       Keyboard.dismiss();
       
-      // 1. Check the hook's location, but keep Denver as the final fallback
       const lat = location?.latitude || 39.7541;
       const lng = location?.longitude || -104.9998;
-
-      console.log(`[HADE DEBUG] Triggering decide at: ${lat}, ${lng}`);
 
       setLoading(true);
       setEmptyState(false);
@@ -155,15 +155,15 @@ export default function DecideScreen(): React.JSX.Element {
           geo: { lat, lng }, 
           intent: selectedIntent,
           group_size: 1,
+          provider: llmProvider, // <--- CRITICAL: Pass the global store value here
         });
 
         if (response.status !== "ok" || !response.data?.primary) {
-          setEmptyState(true);
-          clearDecision();
+          // ... handle empty
         } else {
-          // Cast to any just for this log line
+          // The response now contains the actual provider used by the backend
           const responseData = response.data as any;
-          console.log(`[HADE ENGINE] Brain: ${responseData.provider || 'Unknown'}`);
+          console.log(`[HADE ENGINE] Brain Active: ${responseData.provider}`);
           
           setDecision(response.data);
           await setDecisionAsync(response.data);
@@ -180,7 +180,7 @@ export default function DecideScreen(): React.JSX.Element {
         setLoading(false);
       }
     },
-    [setDecisionAsync, clearDecision, location] // CRITICAL: 'location' must be in the dependency array
+    [location, llmProvider, setDecisionAsync, clearDecision] // CRITICAL: 'location' must be in the dependency array
   );
 
   const handleIntentSelection = (val: Intent) => {

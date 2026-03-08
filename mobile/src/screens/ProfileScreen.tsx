@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import {
   StyleSheet,
   View,
@@ -9,20 +9,37 @@ import {
   Switch,
   Alert,
 } from "react-native";
-// This links to your global user state
-import { useSessionStore } from "../store/useSessionStore"; 
+import { useSessionStore } from "../store/useSessionStore";
 import { useNavigation } from "@react-navigation/native";
-// This handles the iPhone notch/dynamic island spacing
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function ProfileScreen(): React.JSX.Element {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  
+  // HADE Global State
   const user = useSessionStore((s) => s.user);
   const setUser = useSessionStore((s) => s.setUser);
+  const llmProvider = useSessionStore((s) => s.llmProvider);
+  const setLLMProvider = useSessionStore((s) => s.setLLMProvider);
 
+  // Add this state to track the unconfirmed choice
+const [pendingProvider, setPendingProvider] = useState<"gemini" | "openai">(llmProvider);
+  
+const handleConfirmSwitch = () => {
+  setLLMProvider(pendingProvider); // Commit to global store
+  setDevMenuVisible(false); // Close overlay
+  // Optional: Add a small haptic here to confirm the "Calibration" is locked
+};
+
+  // Local UI State
   const [incognito, setIncognito] = useState(false);
   const [notifications, setNotifications] = useState(true);
+
+  // Hidden Calibration Trigger State
+  const [devMenuVisible, setDevMenuVisible] = useState(false);
+  const tapCount = useRef(0);
+  const lastTap = useRef(0);
 
   const handleSignOut = () => {
     Alert.alert("Sign Out", "Are you sure?", [
@@ -33,6 +50,20 @@ export default function ProfileScreen(): React.JSX.Element {
         onPress: () => setUser(null) 
       },
     ]);
+  };
+
+  const handleVersionTap = () => {
+    const now = Date.now();
+    // Reset if taps are more than 2s apart
+    if (now - lastTap.current > 2000) tapCount.current = 0;
+    
+    lastTap.current = now;
+    tapCount.current += 1;
+
+    if (tapCount.current === 3) {
+      tapCount.current = 0;
+      setDevMenuVisible(true);
+    }
   };
 
   return (
@@ -50,6 +81,7 @@ export default function ProfileScreen(): React.JSX.Element {
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        {/* Profile Header */}
         <View style={styles.header}>
           <View style={styles.avatarPlaceholder}>
             <Text style={styles.avatarText}>
@@ -60,6 +92,7 @@ export default function ProfileScreen(): React.JSX.Element {
           <Text style={styles.username}>@{user?.username || "traveler"}</Text>
         </View>
 
+        {/* Account Calibration */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account Calibration</Text>
           <TouchableOpacity style={styles.row} onPress={() => Alert.alert("Edit Profile", "Feature coming soon.")}>
@@ -77,6 +110,7 @@ export default function ProfileScreen(): React.JSX.Element {
           </View>
         </View>
 
+        {/* Engine Preferences */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Engine Preferences</Text>
           <View style={styles.row}>
@@ -93,13 +127,58 @@ export default function ProfileScreen(): React.JSX.Element {
           </TouchableOpacity>
         </View>
 
+        {/* Footer & Hidden Trigger */}
         <View style={styles.footer}>
           <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
             <Text style={styles.signOutText}>Sign Out</Text>
           </TouchableOpacity>
-          <Text style={styles.versionText}>HADE v1.0.0-alpha · Prototyping the Future</Text>
+          
+          <TouchableOpacity onPress={handleVersionTap} activeOpacity={1}>
+            <Text style={styles.versionText}>HADE v1.0.0-alpha · Prototyping the Future</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
+
+{/* Engine Bypass Overlay (Terminal Style) */}
+{devMenuVisible && (
+  <View style={styles.devOverlay}>
+    <View style={styles.devSheet}>
+      <Text style={styles.devTitle}>SYSTEM CALIBRATION</Text>
+      
+      <TouchableOpacity 
+        style={styles.devRow} 
+        onPress={() => setPendingProvider('gemini')}
+      >
+        <Text style={styles.devLabel}>Force Gemini (Atmospheric)</Text>
+        {pendingProvider === 'gemini' && <Text style={styles.devCheck}>SELECT</Text>}
+      </TouchableOpacity>
+
+      <TouchableOpacity 
+        style={styles.devRow} 
+        onPress={() => setPendingProvider('openai')}
+      >
+        <Text style={styles.devLabel}>Force OpenAI (Logical)</Text>
+        {pendingProvider === 'openai' && <Text style={styles.devCheck}>SELECT</Text>}
+      </TouchableOpacity>
+
+      {/* NEW: Confirmation Action */}
+      <TouchableOpacity 
+        style={[
+          styles.confirmButton, 
+          pendingProvider === llmProvider && styles.confirmDisabled
+        ]} 
+        onPress={handleConfirmSwitch}
+        disabled={pendingProvider === llmProvider}
+      >
+        <Text style={styles.confirmButtonText}>COMMIT CALIBRATION</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity onPress={() => setDevMenuVisible(false)} style={styles.closeDev}>
+        <Text style={styles.closeDevText}>Cancel</Text>
+      </TouchableOpacity>
+    </View>
+  </View>
+)}
     </SafeAreaView>
   );
 }
@@ -126,7 +205,6 @@ const styles = StyleSheet.create({
   },
   backChevron: { color: "#FAFAF8", fontSize: 32, marginTop: -4 },
   content: { padding: 24 },
-  // ... Keep all your existing styles from here down
   header: { alignItems: "center", marginBottom: 40, marginTop: 20 },
   avatarPlaceholder: {
     width: 80,
@@ -166,4 +244,66 @@ const styles = StyleSheet.create({
   signOutButton: { padding: 16, width: "100%", alignItems: "center" },
   signOutText: { color: "#EF4444", fontSize: 16, fontWeight: "700" },
   versionText: { color: "#262626", fontSize: 11, marginTop: 24, fontWeight: "600" },
+  
+  // Dev Mode Overlay Styles
+  devOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.92)',
+    justifyContent: 'center',
+    padding: 24,
+    zIndex: 1000,
+  },
+  devSheet: {
+    backgroundColor: '#171717',
+    borderRadius: 16,
+    padding: 24,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+  },
+  devTitle: { 
+    color: '#F59E0B', 
+    fontWeight: '900', 
+    marginBottom: 24, 
+    fontSize: 13, 
+    letterSpacing: 2,
+    textAlign: 'center'
+  },
+  devRow: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    paddingVertical: 18,
+    borderBottomWidth: 1,
+    borderColor: '#262626'
+  },
+  confirmButton: {
+    backgroundColor: '#F59E0B',
+    padding: 16,
+    borderRadius: 8,
+    marginTop: 24,
+    alignItems: 'center',
+  },
+  confirmDisabled: {
+    backgroundColor: '#262626',
+    opacity: 0.5,
+  },
+  confirmButtonText: {
+    color: '#0D0D0D',
+    fontWeight: '900',
+    fontSize: 14,
+    letterSpacing: 1,
+  },
+  devCheck: { 
+    color: '#F59E0B', 
+    fontSize: 12, 
+    fontWeight: '900',
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4
+  },
+  devLabel: { color: '#FAFAF8', fontSize: 15, fontWeight: '500' },
+
+  closeDev: { marginTop: 32, alignItems: 'center' },
+  closeDevText: { color: '#57534E', fontSize: 13, fontWeight: '700', textTransform: 'uppercase' }
 });

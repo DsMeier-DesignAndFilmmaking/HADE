@@ -142,6 +142,7 @@ export interface DecideRequest {
   intent?: string | null;
   group_size?: number;
   session_id?: string | null;
+  provider?: "gemini" | "openai";
 }
 
 export interface SignalCreate {

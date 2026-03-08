@@ -10,6 +10,8 @@ interface SessionState {
 
   // User profile
   user: User | null;
+  llmProvider: "gemini" | "openai"; // Add this
+  setLLMProvider: (provider: "gemini" | "openai") => void; // Add this
 
   // Current session context
   sessionId: string | null;
@@ -39,6 +41,8 @@ export const useSessionStore = create<SessionState>((set) => ({
 
   // User profile
   user: null,
+  llmProvider: "gemini", // Default
+  setLLMProvider: (llmProvider) => set({ llmProvider }),
 
   // Current session context
   sessionId: null,
