@@ -1,16 +1,14 @@
 """Core /decide endpoint — THE reason HADE exists.
 
 Orchestrates the 5-layer pipeline:
-  Context Engine → Signal Aggregator → Trust Layer → Scoring → Decision
-
-Returns one confident recommendation with 2-3 fallbacks, or an honest empty state.
-Target latency: < 800ms p95.
+Context Engine → Signal Aggregator → Trust Layer → Scoring → Decision
 """
 
 import logging
 import time
 import uuid
 from uuid import UUID
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -37,6 +35,12 @@ router = APIRouter(tags=["decide"])
 VENUE_SEARCH_RADIUS_M = 1000
 SIGNAL_SEARCH_RADIUS_M = 1500
 
+# --- AUDIT MODE HELPERS ---
+@dataclass
+class MockAuth:
+    """Temporary mock to bypass JWT requirement for OpenAI/Gemini auditing."""
+    user_id: UUID
+    is_anonymous: bool = False
 
 async def _resolve_place_venue_ids(
     place_ids: list[str],
@@ -61,19 +65,16 @@ async def _resolve_place_venue_ids(
 @router.post("/decide", response_model=ApiResponse[DecideResponse | None])
 async def decide(
     request: DecideRequest,
-    auth_context: AuthContext = Depends(get_current_auth_context),
+    # auth_context: AuthContext = Depends(get_current_auth_context), # BYPASSED FOR AUDIT
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[DecideResponse | None]:
-    """Core endpoint — returns one recommendation.
-
-    Pipeline:
-    1. Build ContextState from geo, time, intent
-    2. Query Google Places for nearby venues matching intent
-    3. Aggregate existing signals near the user (may be empty on cold start)
-    4. Compute trust weights on signals (friend signals get 10x)
-    5. Score venues using Places data + signals + trust
-    6. Pick primary + fallbacks, generate rationale
-    """
+    
+    # ── AUDIT BYPASS: Hardcoding a User ID ──
+    # Replace this with your actual Supabase User ID if you want to see YOUR signals
+    # Or keep this dummy UUID just to satisfy the database constraints
+    audit_user_id = UUID("00000000-0000-0000-0000-000000000000")
+    auth_context = MockAuth(user_id=audit_user_id)
+    
     start_ms = time.monotonic()
     request_id = uuid.uuid4()
 
@@ -81,7 +82,7 @@ async def decide(
         # ── Layer 1: Context Engine ──
         context = await build_context_state(request, auth_context.user_id, db)
 
-        # ── Google Places: real venue data ──
+        # ── Google Places Data ──
         places = await search_nearby(
             lat=request.geo.lat,
             lng=request.geo.lng,
@@ -90,15 +91,12 @@ async def decide(
         )
 
         if not places:
-            # Nothing nearby — honest empty state
-            latency_ms = round((time.monotonic() - start_ms) * 1000)
-            await db.commit()
             return ApiResponse(
                 status="ok",
                 data=None,
                 meta=ResponseMeta(
                     request_id=request_id,
-                    latency_ms=latency_ms,
+                    latency_ms=round((time.monotonic() - start_ms) * 1000),
                     context_state_id=context.id,
                 ),
             )
@@ -113,17 +111,10 @@ async def decide(
             radius_m=SIGNAL_SEARCH_RADIUS_M,
         )
 
-        # ── Layer 3: Trust Layer ──
-        if auth_context.is_anonymous:
-            # Zero-input guest flow: rely on geo + weather + public signals only.
-            trust_weights = {sig.signal.id: 1.0 for sig in signals}
-            friend_names: dict[UUID, str] = {}
-            user_names: dict[UUID, str] = {}
-        else:
-            trust_result = await compute_trust_weights(signals, auth_context.user_id, db)
-            trust_weights = trust_result.weights
-            friend_names = trust_result.friend_names
-            user_names = trust_result.user_names
+# ── Layer 3: Trust Layer (AUDIT MODE BYPASS) ──
+        trust_weights = {sig.signal.id: 1.0 for sig in signals}
+        friend_names = {}
+        user_names = {}
 
         place_to_venue_id = await _resolve_place_venue_ids(
             place_ids=[place.place_id for place in places],
@@ -144,19 +135,41 @@ async def decide(
             place_to_venue_id=place_to_venue_id,
         )
 
-        # ── Layer 5: Decision Layer (LLM-backed, deterministic fallback) ──
+        # ── Layer 5: Decision Layer (Now with Provider Toggle) ──
         empty_reason: str | None = None
         llm_used = False
         llm_model = ""
+        decision = None
+
         try:
+            # CALLING THE AI SERVICE
             llm_result = await make_llm_decision(
                 candidate_set=candidate_set,
                 context=context,
+                provider=request.provider 
             )
+            
             llm_used = llm_result.used_llm
             llm_model = llm_result.model_name
             decision = llm_result.decision
             empty_reason = llm_result.empty_reason
+            
+            if decision:
+                decision.provider = llm_model 
+                logger.info(f"AI RATIONALE GENERATED: {decision.primary.rationale}")
+
+        except Exception:
+            logger.exception("decide: llm decision failed, falling back to deterministic layer")
+            decision = await make_decision(
+                candidate_set=candidate_set,
+                context_state_id=context.id,
+                time_of_day=context.time_of_day,
+                user_id=auth_context.user_id,
+                db=db,
+            )
+            if decision is None:
+                empty_reason = LLM_EMPTY_REASON_DEFAULT
+
         except Exception:
             logger.exception("decide: llm decision failed, falling back to deterministic layer")
             decision = await make_decision(
@@ -175,23 +188,20 @@ async def decide(
                 ErrorDetail(
                     code="INSUFFICIENT_CONTEXT",
                     message=empty_reason,
-                    detail="No candidate cleared HADE's confidence threshold.",
+                    detail=f"No candidate cleared the threshold using {request.provider}.",
                 )
             )
 
         await db.commit()
-
         latency_ms = round((time.monotonic() - start_ms) * 1000)
 
         logger.info(
-            "decide: user=%s anonymous=%s intent=%s places=%d signals=%d candidates=%d llm_used=%s llm_model=%s latency=%dms",
+            "decide: user=%s intent=%s signals=%d candidates=%d provider=%s model=%s latency=%dms",
             auth_context.user_id,
-            auth_context.is_anonymous,
             request.intent,
-            len(places),
             len(signals),
             len(candidate_set.candidates),
-            llm_used,
+            request.provider,
             llm_model,
             latency_ms,
         )
@@ -208,7 +218,6 @@ async def decide(
         )
 
     except ValueError as e:
-        # Config errors (missing API key, etc.)
         raise HTTPException(status_code=500, detail=str(e))
     except Exception:
         await db.rollback()

@@ -89,6 +89,7 @@ export interface DecideResponse {
   primary: Opportunity;
   fallbacks: Opportunity[];
   context_state_id: string;
+  provider?: string;
 }
 
 export type MomentAction = "ACCEPTED" | "DISMISSED" | "IGNORED";

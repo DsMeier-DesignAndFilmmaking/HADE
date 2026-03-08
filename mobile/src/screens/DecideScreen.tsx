@@ -20,6 +20,8 @@ import { useDecisionStore } from "../store/useDecisionStore";
 import { postDecide, postMoment } from "../services/api";
 import type { DecideResponse, Opportunity, Intent } from "../types";
 
+import { useLocation } from "../hooks/useLocation";
+
 import RecommendationCard from "../components/RecommendationCard";
 import CreateEventSheet from "../components/CreateEventSheet";
 
@@ -32,10 +34,13 @@ const Haptics = (() => {
 })();
 
 export default function DecideScreen(): React.JSX.Element {
+  const { location } = useLocation();
   const user = useSessionStore((s) => s.user);
   const navigation = useNavigation<any>();
-  const setStoredDecisionAsync = useDecisionStore((s) => s.setDecisionAsync);
-  const clearStoredDecision = useDecisionStore((s) => s.clearDecision);
+
+  // Corrected store hook names to avoid TS errors
+  const setDecisionAsync = useDecisionStore((s) => s.setDecisionAsync);
+  const clearDecision = useDecisionStore((s) => s.clearDecision);
 
   const [signingOut, setSigningOut] = useState(false);
   const [intent, setIntent] = useState<Intent | null>(null);
@@ -49,26 +54,6 @@ export default function DecideScreen(): React.JSX.Element {
   const mapRef = useRef<MapView | null>(null);
 
   const primary: Opportunity | undefined = decision?.primary;
-
-  // Mocks strictly for Dev Mode
-  const MOCK_SUCCESS: Opportunity = {
-    id: "64c235fc-008e-401a-84c4-cc7b9b134bcf",
-    venue_name: "Union Station Lodge",
-    category: "Cocktails & Chill",
-    eta_minutes: 12,
-    distance_meters: 850,
-    is_primary: true,
-    geo: { lat: 39.7541, lng: -104.9998 },
-    rationale: "Alex was here 20m ago. The lighting is dimmed and the fireplace is active.",
-    trust_attributions: [{ user_name: "Maya", signal_summary: "Calibrated 15m ago" }],
-    event: null,
-    primary_signal: {
-      user_name: "Alex",
-      timestamp: new Date(Date.now() - 15 * 60_000).toISOString(),
-      vibe_label: "Busy/Great",
-      comment: "The miso ramen is unreal tonight.",
-    },
-  };
 
   const handleSignOut = (): void => {
     Alert.alert("Sign out", "Are you sure?", [
@@ -95,12 +80,12 @@ export default function DecideScreen(): React.JSX.Element {
       useNativeDriver: false,
     }).start();
     setDecision(null);
-    clearStoredDecision();
+    clearDecision(); // Uses corrected store method
     setEmptyState(false);
     setIntent(null);
     setLoading(false);
     setDismissing(false);
-  }, [clearStoredDecision, mapHeight]);
+  }, [clearDecision, mapHeight]);
 
   const handleDismiss = useCallback(async () => {
     if (dismissing) return;
@@ -118,7 +103,7 @@ export default function DecideScreen(): React.JSX.Element {
         action: "DISMISSED",
       });
     } catch {
-      // Best-effort analytics: dismissal should still clear local state.
+      // Best-effort analytics
     } finally {
       handleReset();
     }
@@ -126,7 +111,7 @@ export default function DecideScreen(): React.JSX.Element {
 
   const animateMapToOpportunity = (opp: Opportunity) => {
     Animated.timing(mapHeight, {
-      toValue: 240, // Increased height for better visibility
+      toValue: 240,
       duration: 400,
       useNativeDriver: false,
     }).start(() => {
@@ -134,7 +119,7 @@ export default function DecideScreen(): React.JSX.Element {
         {
           latitude: opp.geo.lat,
           longitude: opp.geo.lng,
-          latitudeDelta: 0.005, // Tighter zoom for "Confidence"
+          latitudeDelta: 0.005,
           longitudeDelta: 0.005,
         },
         600,
@@ -151,49 +136,56 @@ export default function DecideScreen(): React.JSX.Element {
     }
   };
 
-  const triggerDecision = useCallback(async (selectedIntent: Intent) => {
-    Keyboard.dismiss();
-    setLoading(true);
-    setEmptyState(false);
-    setDecision(null);
+  const triggerDecision = useCallback(
+    async (selectedIntent: Intent) => {
+      Keyboard.dismiss();
+      
+      // 1. Check the hook's location, but keep Denver as the final fallback
+      const lat = location?.latitude || 39.7541;
+      const lng = location?.longitude || -104.9998;
 
-    if (__DEV__) {
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      setDecision({ primary: MOCK_SUCCESS, fallbacks: [], context_state_id: "dev-123" });
-      await setStoredDecisionAsync({ primary: MOCK_SUCCESS, fallbacks: [], context_state_id: "dev-123" });
-      animateMapToOpportunity(MOCK_SUCCESS);
-      runMediumHaptic(); // Physical confirmation of decision
-      setLoading(false);
-      return;
-    }
+      console.log(`[HADE DEBUG] Triggering decide at: ${lat}, ${lng}`);
 
-    try {
-      const response = await postDecide({
-        geo: { lat: 39.7541, lng: -104.9998 }, // Target: Replace with live location
-        intent: selectedIntent,
-        group_size: 1,
-      });
+      setLoading(true);
+      setEmptyState(false);
+      setDecision(null);
 
-      if (response.status !== "ok" || !response.data?.primary) {
+      try {
+        const response = await postDecide({
+          geo: { lat, lng }, 
+          intent: selectedIntent,
+          group_size: 1,
+        });
+
+        if (response.status !== "ok" || !response.data?.primary) {
+          setEmptyState(true);
+          clearDecision();
+        } else {
+          // Cast to any just for this log line
+          const responseData = response.data as any;
+          console.log(`[HADE ENGINE] Brain: ${responseData.provider || 'Unknown'}`);
+          
+          setDecision(response.data);
+          await setDecisionAsync(response.data);
+          
+          // This expands the map and focuses on the recommendation in Glendale
+          animateMapToOpportunity(response.data.primary);
+          runMediumHaptic();
+        }
+      } catch (error) {
+        console.error("API Error:", error);
         setEmptyState(true);
-        clearStoredDecision();
-      } else {
-        setDecision(response.data);
-        await setStoredDecisionAsync(response.data);
-        animateMapToOpportunity(response.data.primary);
-        runMediumHaptic();
+        clearDecision();
+      } finally {
+        setLoading(false);
       }
-    } catch {
-      setEmptyState(true);
-      clearStoredDecision();
-    } finally {
-      setLoading(false);
-    }
-  }, [setStoredDecisionAsync, clearStoredDecision]);
+    },
+    [setDecisionAsync, clearDecision, location] // CRITICAL: 'location' must be in the dependency array
+  );
 
   const handleIntentSelection = (val: Intent) => {
     setIntent(val);
-    triggerDecision(val); // Instant execution per Anti-Feed manifesto
+    triggerDecision(val);
   };
 
   return (
@@ -226,7 +218,9 @@ export default function DecideScreen(): React.JSX.Element {
         <View style={styles.body}>
           {!primary && !loading && !emptyState && (
             <View>
-              <Text style={styles.prompt}>The city is on your side.{"\n"}What's the move?</Text>
+              <Text style={styles.prompt}>
+                The city is on your side.{"\n"}What's the move?
+              </Text>
 
               <View style={styles.intentGrid}>
                 {(["eat", "drink", "chill", "scene"] as Intent[]).map((val) => (
@@ -269,7 +263,7 @@ export default function DecideScreen(): React.JSX.Element {
                   ref={mapRef}
                   style={styles.mapInner}
                   userInterfaceStyle="dark"
-                  scrollEnabled={false} // Force focus on the decision
+                  scrollEnabled={false}
                   initialRegion={{
                     latitude: primary.geo.lat,
                     longitude: primary.geo.lng,
@@ -277,11 +271,10 @@ export default function DecideScreen(): React.JSX.Element {
                     longitudeDelta: 0.01,
                   }}
                 >
-                  <Marker 
-                    coordinate={{ latitude: primary.geo.lat, longitude: primary.geo.lng }} 
-                    pinColor="#F59E0B" 
+                  <Marker
+                    coordinate={{ latitude: primary.geo.lat, longitude: primary.geo.lng }}
+                    pinColor="#F59E0B"
                   />
-                  {/* Fallbacks hidden by default per BRAIN_UX logic */}
                 </MapView>
               </Animated.View>
             </View>

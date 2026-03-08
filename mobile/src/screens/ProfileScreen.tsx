@@ -9,15 +9,18 @@ import {
   Switch,
   Alert,
 } from "react-native";
-import { useSessionStore } from "../store/useSessionStore";
+// This links to your global user state
+import { useSessionStore } from "../store/useSessionStore"; 
 import { useNavigation } from "@react-navigation/native";
+// This handles the iPhone notch/dynamic island spacing
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 export default function ProfileScreen(): React.JSX.Element {
   const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
   const user = useSessionStore((s) => s.user);
   const setUser = useSessionStore((s) => s.setUser);
 
-  // Local state for toggles — maps to your Pydantic User schemas later
   const [incognito, setIncognito] = useState(false);
   const [notifications, setNotifications] = useState(true);
 
@@ -27,15 +30,26 @@ export default function ProfileScreen(): React.JSX.Element {
       { 
         text: "Sign Out", 
         style: "destructive", 
-        onPress: () => setUser(null) // Resets store to Auth state
+        onPress: () => setUser(null) 
       },
     ]);
   };
 
   return (
     <SafeAreaView style={styles.container}>
+      {/* Navigation Header */}
+      <View style={[styles.navHeader, { paddingTop: insets.top }]}>
+        <TouchableOpacity 
+          style={styles.backButton} 
+          onPress={() => navigation.goBack()}
+        >
+          <Text style={styles.backChevron}>‹</Text>
+        </TouchableOpacity>
+        <Text style={styles.navTitle}>Settings</Text>
+        <View style={{ width: 44 }} />
+      </View>
+
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Header Section */}
         <View style={styles.header}>
           <View style={styles.avatarPlaceholder}>
             <Text style={styles.avatarText}>
@@ -46,7 +60,6 @@ export default function ProfileScreen(): React.JSX.Element {
           <Text style={styles.username}>@{user?.username || "traveler"}</Text>
         </View>
 
-        {/* Account Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Account Calibration</Text>
           <TouchableOpacity style={styles.row} onPress={() => Alert.alert("Edit Profile", "Feature coming soon.")}>
@@ -64,7 +77,6 @@ export default function ProfileScreen(): React.JSX.Element {
           </View>
         </View>
 
-        {/* Preferences Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Engine Preferences</Text>
           <View style={styles.row}>
@@ -81,7 +93,6 @@ export default function ProfileScreen(): React.JSX.Element {
           </TouchableOpacity>
         </View>
 
-        {/* Action Section */}
         <View style={styles.footer}>
           <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
             <Text style={styles.signOutText}>Sign Out</Text>
@@ -95,7 +106,27 @@ export default function ProfileScreen(): React.JSX.Element {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#0D0D0D" },
+  navHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderColor: "#1C1917",
+  },
+  navTitle: { color: "#FAFAF8", fontSize: 16, fontWeight: "700" },
+  backButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: "#1A1A1A",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  backChevron: { color: "#FAFAF8", fontSize: 32, marginTop: -4 },
   content: { padding: 24 },
+  // ... Keep all your existing styles from here down
   header: { alignItems: "center", marginBottom: 40, marginTop: 20 },
   avatarPlaceholder: {
     width: 80,
