@@ -40,13 +40,13 @@ function formatEventTimeRange(startsAt: string, expiresAt: string): string {
 /** Maps vibe_label to badge color. Amber for fire/great, Stone for chill, muted for avoid. */
 function vibeBadgeColor(vibeLabel: string): string {
   const lower = vibeLabel.toLowerCase();
-  if (lower.includes("great") || lower.includes("fire") || lower.includes("busy")) {
+  if (lower.includes("great") || lower.includes("fire") || lower.includes("busy") || lower.includes("loved")) {
     return "#F59E0B";
   }
-  if (lower.includes("avoid")) {
+  if (lower.includes("avoid") || lower.includes("heads up")) {
     return "#78716C";
   }
-  // chill / default
+  // chill / solid / default
   return "#A8A29E";
 }
 

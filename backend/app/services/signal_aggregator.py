@@ -1,12 +1,8 @@
-"""Layer 2: Signal Aggregator — ingests and normalizes signals with decay rates.
+"""Layer 2: Signal Aggregator — ingests and normalizes spatial+temporal signals."""
 
-EVENT signals participate in the same spatial+temporal queries as other signal
-types. Their strength decays based on proximity to starts_at (urgency increases
-as the event approaches, then decays after it starts).
-"""
-
-import math
-from datetime import datetime, timezone
+import re
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from geoalchemy2 import functions as geo_func
@@ -14,47 +10,45 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.context_state import ContextState
-from app.models.signal import Signal, SignalType
+from app.models.signal import Signal
+from app.services.trust import (
+    PURGE_SIGNAL_CUTOFF_HOURS,
+    compute_cliff_edge_decay,
+    freshness_multiplier,
+)
 
-# Decay half-life per signal type (in seconds)
-DECAY_HALF_LIFE: dict[SignalType, float] = {
-    SignalType.PRESENCE: 15 * 60,          # 15 minutes
-    SignalType.SOCIAL_RELAY: 3 * 3600,     # 3 hours
-    SignalType.ENVIRONMENTAL: 6 * 3600,    # 6 hours
-    SignalType.BEHAVIORAL: 7 * 86400,      # 7 days
-    SignalType.AMBIENT: 30 * 86400,        # 30 days
-    SignalType.EVENT: 2 * 3600,            # 2 hours (but modified by urgency)
-}
+_POINT_WKT_REGEX = re.compile(
+    r"POINT\s*\(\s*(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s*\)",
+    re.IGNORECASE,
+)
 
 
-def compute_decay(signal: Signal, now: datetime) -> float:
-    """Apply exponential decay to signal strength based on type and age.
+@dataclass(frozen=True)
+class AggregatedSignal:
+    signal: Signal
+    lat: float | None
+    lng: float | None
+    age_hours: float
+    decay_strength: float
+    freshness_multiplier: float
+    effective_strength: float
 
-    For EVENT signals, strength increases as starts_at approaches (urgency),
-    then decays normally after the event starts.
-    """
-    half_life = DECAY_HALF_LIFE.get(signal.type, 3600)
-    age_seconds = (now - signal.emitted_at).total_seconds()
 
-    if signal.type == SignalType.EVENT and signal.event_id:
-        # For events: use time-until-start as urgency boost
-        # Before start: strength increases (urgency)
-        # After start: normal decay from start time
-        time_to_expiry = (signal.expires_at - now).total_seconds()
-        if time_to_expiry <= 0:
-            return 0.0
-        total_duration = (signal.expires_at - signal.emitted_at).total_seconds()
-        if total_duration <= 0:
-            return 0.0
-        # Remaining fraction of event life
-        remaining = time_to_expiry / total_duration
-        return signal.strength * max(remaining, 0.2)
+def _age_in_hours(signal: Signal, now: datetime) -> float:
+    return max(0.0, (now - signal.emitted_at).total_seconds() / 3600.0)
 
-    # Standard exponential decay
-    if age_seconds <= 0:
-        return signal.strength
-    decay_factor = math.exp(-0.693 * age_seconds / half_life)
-    return signal.strength * decay_factor
+
+def _parse_wkt_point(geo_wkt: str | None) -> tuple[float | None, float | None]:
+    if not geo_wkt:
+        return (None, None)
+
+    match = _POINT_WKT_REGEX.search(geo_wkt)
+    if not match:
+        return (None, None)
+
+    lng = float(match.group(1))
+    lat = float(match.group(2))
+    return (lat, lng)
 
 
 async def aggregate_signals(
@@ -64,11 +58,19 @@ async def aggregate_signals(
     lat: float | None = None,
     lng: float | None = None,
     radius_m: int = 1500,
-) -> list[Signal]:
-    """Fetch and normalize signals within context radius, applying decay weights.
+) -> list[AggregatedSignal]:
+    """Fetch and normalize signals within context radius.
 
-    Uses PostGIS ST_DWithin for spatial filtering and excludes expired signals.
-    Returns signals sorted by decayed strength (strongest first).
+    Venue binding is handled downstream by the scoring layer:
+    - direct match by venue_id
+    - floating signal fallback by <= 50m proximity
+
+    Freshness treatment:
+    - <= 45m old: 1.3x multiplier
+    - > 4h old: cliff-edge clamp to < 0.2 strength
+    - > 12h old: excluded in SQL and never enters CandidateSet
+
+    Returns AggregatedSignal sorted by effective strength (strongest first).
 
     Args:
         context: The ContextState for this decision request.
@@ -81,7 +83,9 @@ async def aggregate_signals(
     Cold start: returns empty list if no signals exist nearby — this is expected
     and the scoring layer handles it gracefully using Google Places data alone.
     """
-    now = datetime.now(timezone.utc)
+    _ = user_id
+    now = datetime.now(UTC)
+    purge_cutoff = now - timedelta(hours=PURGE_SIGNAL_CUTOFF_HOURS)
 
     # Build the reference point for spatial query
     if lat is not None and lng is not None:
@@ -90,25 +94,50 @@ async def aggregate_signals(
         # Fallback: use context.geo directly (works if still WKT string from flush)
         ref_point = context.geo
 
-    # PostGIS spatial query: signals within radius that haven't expired
+    # PostGIS spatial query: limit transfer by purging stale signals in SQL.
     result = await db.execute(
-        select(Signal).where(
+        select(
+            Signal,
+            geo_func.ST_AsText(Signal.geo).label("geo_wkt"),
+        ).where(
             geo_func.ST_DWithin(
                 Signal.geo,
                 geo_func.ST_GeogFromText(ref_point),
                 radius_m,
             ),
             Signal.expires_at > now,
+            Signal.emitted_at >= purge_cutoff,
         )
     )
-    signals = list(result.scalars().all())
+    rows = result.all()
 
-    # Apply decay to each signal's strength (mutates in-memory, not persisted)
-    for sig in signals:
-        sig.strength = compute_decay(sig, now)
+    aggregated: list[AggregatedSignal] = []
+    for row in rows:
+        signal: Signal = row[0]
+        geo_wkt: str | None = row[1]
 
-    # Filter out fully-decayed signals and sort by strength descending
-    signals = [s for s in signals if s.strength > 0.01]
-    signals.sort(key=lambda s: s.strength, reverse=True)
+        age_hours = _age_in_hours(signal, now)
+        if age_hours > PURGE_SIGNAL_CUTOFF_HOURS:
+            continue
 
-    return signals
+        decay_strength = compute_cliff_edge_decay(signal, now)
+        freshness_mult = freshness_multiplier(age_hours)
+        effective_strength = decay_strength * freshness_mult
+        if effective_strength <= 0.01:
+            continue
+
+        lat_val, lng_val = _parse_wkt_point(geo_wkt)
+        aggregated.append(
+            AggregatedSignal(
+                signal=signal,
+                lat=lat_val,
+                lng=lng_val,
+                age_hours=age_hours,
+                decay_strength=decay_strength,
+                freshness_multiplier=freshness_mult,
+                effective_strength=effective_strength,
+            )
+        )
+
+    aggregated.sort(key=lambda item: item.effective_strength, reverse=True)
+    return aggregated

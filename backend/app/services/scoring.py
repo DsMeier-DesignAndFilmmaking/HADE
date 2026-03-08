@@ -1,38 +1,18 @@
-"""Layer 4: Scoring System — produces scored candidates from Google Places + signals.
-
-MVP scoring formula:
-  base_score = 1.0 - (distance / radius)           # Closer = better
-  + open_bonus (0.3 if open now)
-  + category_bonus (0.2 if intent matches)
-  + rating_bonus ((rating - 3.0) * 0.1)
-  * (1 + signal_boost)                             # Signals from check-ins
-  * trust_boost                                     # Friend signals multiply
-
-Confidence floor applies — venues scoring below 0.3 are dropped.
-Empty list is a valid response ("Nothing great right now").
-
-EVENT signals (Phase 2) will receive additional scoring adjustments:
-- Temporal urgency bonus: events within 30 min of starts_at get a boost
-- Intent matching: event category matched against context.intent_declared
-- Social proof multiplier: friend interest count > 0 boosts score (capped)
-- Freshness: recently created events score higher than older active ones
-"""
+"""Layer 4: Scoring System — venue-bound candidates for LLM-grounded inference."""
 
 import math
-from dataclasses import dataclass, field
 from uuid import UUID
 
 from app.models.context_state import ContextState
-from app.models.signal import Signal
+from app.schemas.candidate import Candidate, CandidateSet, CandidateSignal
+from app.schemas.common import GeoLocation
 from app.services.google_places import PlaceResult
+from app.services.signal_aggregator import AggregatedSignal
+from app.services.trust_layer import build_venue_trust_contexts
 
 # Confidence floor: opportunities below this score are not surfaced
 CONFIDENCE_FLOOR = 0.3
-
-# Phase 2 constants (preserved for later)
-EVENT_URGENCY_WINDOW_MINUTES = 30
-EVENT_URGENCY_BOOST = 1.5
-INTENT_MATCH_BONUS = 1.3
+BINDING_RADIUS_M = 50.0
 
 
 def _haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -67,92 +47,155 @@ def _intent_matches_types(intent: str | None, types: list[str]) -> bool:
     return bool(target_types & set(types))
 
 
-# ─── Scored candidate (intermediate result) ──────────────────────────────────
-@dataclass
-class ScoredCandidate:
-    """A venue candidate with its computed score and metadata."""
+def _environmental_context(context: ContextState) -> str | None:
+    weather = (context.weather_condition or "").strip()
+    time_of_day = (context.time_of_day or "").strip().replace("_", " ")
 
-    place: PlaceResult
-    score: float
-    distance_m: float
-    eta_minutes: int
-    matched_signals: list[Signal] = field(default_factory=list)
-    has_friend_signal: bool = False
+    tokens: list[str] = []
+    if weather:
+        tokens.append(weather.title())
+    if time_of_day:
+        tokens.append(time_of_day.title())
+
+    if not tokens:
+        return None
+    return " • ".join(tokens)
+
+
+def _bind_signal_to_place(
+    signal: AggregatedSignal,
+    place: PlaceResult,
+    place_venue_id: UUID | None,
+) -> tuple[bool, str | None, float | None]:
+    if place_venue_id is not None and signal.signal.venue_id == place_venue_id:
+        return (True, "venue_id_match", 0.0)
+
+    if signal.signal.venue_id is not None:
+        return (False, None, None)
+
+    if signal.lat is None or signal.lng is None:
+        return (False, None, None)
+
+    distance_m = _haversine_distance(signal.lat, signal.lng, place.lat, place.lng)
+    if distance_m <= BINDING_RADIUS_M:
+        return (True, "floating_within_50m", distance_m)
+    return (False, None, None)
 
 
 def score_candidates(
     places: list[PlaceResult],
-    signals: list[Signal],
+    signals: list[AggregatedSignal],
     trust_weights: dict[UUID, float],
     context: ContextState,
     user_lat: float,
     user_lng: float,
     radius_m: int = 1000,
-) -> list[ScoredCandidate]:
-    """Score Google Places results, boosted by nearby signals and trust weights.
+    friend_names: dict[UUID, str] | None = None,
+    user_names: dict[UUID, str] | None = None,
+    place_to_venue_id: dict[str, UUID] | None = None,
+) -> CandidateSet:
+    """Build a venue-bound CandidateSet for inference/LLM reasoning."""
+    resolved_place_to_venue_id = place_to_venue_id or {}
+    if friend_names is None:
+        friend_names = {}
+    if user_names is None:
+        user_names = {}
 
-    Trust signals multiply, not add. Confidence floor enforced.
-
-    Returns scored candidates above the confidence floor, sorted descending.
-    Returns empty list if nothing is strong enough — this is valid.
-    """
-    candidates: list[ScoredCandidate] = []
+    staged_by_place: dict[str, tuple[PlaceResult, float, int, float, list[CandidateSignal]]] = {}
+    venue_signals: dict[str, list[CandidateSignal]] = {}
 
     for place in places:
-        # ── Distance scoring ──
         distance_m = _haversine_distance(user_lat, user_lng, place.lat, place.lng)
         eta_minutes = _eta_from_distance(distance_m)
-
-        # Base score: closer is better (linear decay over search radius)
         base_score = max(0.05, 1.0 - (distance_m / radius_m))
-
-        # ── Bonuses ──
         open_bonus = 0.3 if place.open_now else 0.0
         category_bonus = 0.2 if _intent_matches_types(context.intent_declared, place.types) else 0.0
         rating_bonus = max(0.0, (place.rating - 3.0) * 0.1) if place.rating > 0 else 0.0
-
-        # ── Signal matching ──
-        # Find signals near this specific venue (within 100m)
-        matched_signals: list[Signal] = []
-        signal_boost = 0.0
-        has_friend_signal = False
-
-        for sig in signals:
-            # We can't easily extract lat/lng from PostGIS in Python without DB,
-            # so for MVP we associate all nearby signals (already radius-filtered
-            # by the aggregator) with a proximity weight based on venue distance.
-            # Phase 2 will match by venue_id / external_id.
-            sig_contribution = sig.strength * 0.3
-            signal_boost += sig_contribution
-            matched_signals.append(sig)
-
-            trust_mult = trust_weights.get(sig.id, 1.0)
-            if trust_mult > 1.0:
-                has_friend_signal = True
-
-        # ── Trust boost (multiply, not add) ──
-        trust_boost = 2.0 if has_friend_signal else 1.0
-
-        # ── Final score ──
         raw_score = base_score + open_bonus + category_bonus + rating_bonus
-        final_score = raw_score * (1.0 + signal_boost) * trust_boost
 
-        # Apply confidence floor
+        matched_signals: list[CandidateSignal] = []
+        for sig in signals:
+            place_venue_id = resolved_place_to_venue_id.get(place.place_id)
+            is_match, reason, distance_to_venue = _bind_signal_to_place(sig, place, place_venue_id)
+            if not is_match or reason is None:
+                continue
+
+            matched_signals.append(
+                CandidateSignal(
+                    signal_id=sig.signal.id,
+                    signal_type=sig.signal.type.value,
+                    source_user_id=sig.signal.source_user_id,
+                    venue_id=sig.signal.venue_id,
+                    content=sig.signal.content,
+                    emitted_at=sig.signal.emitted_at,
+                    age_hours=sig.age_hours,
+                    decay_strength=sig.decay_strength,
+                    freshness_multiplier=sig.freshness_multiplier,
+                    effective_strength=sig.effective_strength,
+                    distance_to_venue_m=distance_to_venue,
+                    binding_reason=reason,
+                )
+            )
+
+        venue_signals[place.place_id] = matched_signals
+        staged_by_place[place.place_id] = (
+            place,
+            distance_m,
+            eta_minutes,
+            raw_score,
+            matched_signals,
+        )
+
+    trust_contexts = build_venue_trust_contexts(
+        venue_signals=venue_signals,
+        trust_weights=trust_weights,
+        friend_names=friend_names,
+        user_names=user_names,
+    )
+
+    candidates: list[Candidate] = []
+    env_context = _environmental_context(context)
+    for place_id, staged in staged_by_place.items():
+        place, distance_m, eta_minutes, raw_score, matched_signals = staged
+
+        signal_boost = 0.0
+        for matched in matched_signals:
+            signal_boost += matched.effective_strength * 0.25
+
+        trust_context = trust_contexts.get(place_id)
+        if trust_context is None:
+            trust_context = build_venue_trust_contexts(
+                venue_signals={place_id: matched_signals},
+                trust_weights=trust_weights,
+                friend_names=friend_names,
+                user_names=user_names,
+            )[place_id]
+        trust_context.environmental_context = env_context
+
+        trust_boost = 2.0 if trust_context.is_friend_checkin else 1.0
+        final_score = raw_score * (1.0 + signal_boost) * trust_boost
         if final_score < CONFIDENCE_FLOOR:
             continue
 
         candidates.append(
-            ScoredCandidate(
-                place=place,
-                score=final_score,
-                distance_m=distance_m,
+            Candidate(
+                place_id=place.place_id,
+                venue_name=place.name,
+                category=place.category,
+                geo=GeoLocation(lat=place.lat, lng=place.lng),
+                distance_meters=round(distance_m),
                 eta_minutes=eta_minutes,
+                score=final_score,
+                is_open_now=place.open_now,
+                rating=place.rating,
                 matched_signals=matched_signals,
-                has_friend_signal=has_friend_signal,
+                trust_context=trust_context,
             )
         )
 
-    # Sort by score descending
-    candidates.sort(key=lambda c: c.score, reverse=True)
+    candidates.sort(key=lambda candidate: candidate.score, reverse=True)
 
-    return candidates
+    return CandidateSet(
+        context_state_id=context.id,
+        candidates=candidates,
+    )

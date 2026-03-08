@@ -1,5 +1,4 @@
-from pydantic_settings import BaseSettings
-
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -34,6 +33,15 @@ class Settings(BaseSettings):
     # External APIs
     google_places_api_key: str = ""
     openweathermap_api_key: str = ""
+    
+    # LLM & AI Keys
+    # We include both to match your .env and prevent validation errors
+    gemini_api_key: str = ""
+    google_generative_ai_key: str = ""  
+    openai_api_key: str = ""           
+    
+    gemini_model: str = "gemini-1.5-flash"
+    gemini_timeout_ms: int = 2800
 
     # CORS
     cors_origins: list[str] = ["*"]
@@ -41,7 +49,16 @@ class Settings(BaseSettings):
     # Rate limiting
     rate_limit_per_minute: int = 60
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    @property
+    def sync_database_url(self) -> str:
+        """Sync DB URL for Celery workers (strips asyncpg driver)."""
+        return self.database_url.replace("+asyncpg", "")
 
+    # Updated configuration for Pydantic v2
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8",
+        extra="ignore"  # This prevents the app from crashing if extra keys exist in .env
+    )
 
 settings = Settings()

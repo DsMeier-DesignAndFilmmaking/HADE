@@ -17,6 +17,7 @@ class DecideRequest(BaseModel):
 class TrustAttribution(BaseModel):
     user_name: str
     signal_summary: str
+    vibe_label: str
 
 
 class PrimarySignal(BaseModel):

@@ -3,7 +3,7 @@ import uuid
 from datetime import datetime
 
 from geoalchemy2 import Geography
-from sqlalchemy import DateTime, Enum, Float, String, ForeignKey
+from sqlalchemy import DateTime, Enum, Float, ForeignKey, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -32,7 +32,7 @@ class Signal(Base):
     )
     source_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     venue_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("venues.id"), nullable=True)
-    content: Mapped[str | None] = mapped_column(String, nullable=True)
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
     strength: Mapped[float] = mapped_column(Float, default=1.0)
     emitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

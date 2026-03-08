@@ -12,7 +12,6 @@ import * as Location from 'expo-location';
 import * as Contacts from 'expo-contacts';
 import { useSessionStore } from "../store/useSessionStore";
 import { postAuthSync } from "../services/api";
-import { UserUpdate } from "../types";
 
 type OnboardingStep = "vision" | "location" | "trust" | "ready";
 
@@ -27,6 +26,20 @@ export default function OnboardingScreen(): React.JSX.Element {
       setStep(target);
       Animated.timing(fadeAnim, { toValue: 1, duration: 300, useNativeDriver: true }).start();
     });
+  };
+
+  /**
+   * Developer Bypass:
+   * Forces the session store to mark onboarding as complete.
+   * Useful for skipping permissions/sync during UI development.
+   */
+  const handleBypass = () => {
+    console.log("[DEV] Bypassing onboarding...");
+    const currentUser = useSessionStore.getState().user;
+    useSessionStore.getState().setUser({
+      ...currentUser,
+      onboarding_complete: true,
+    } as any);
   };
 
   const handleLocationRequest = async () => {
@@ -64,7 +77,6 @@ export default function OnboardingScreen(): React.JSX.Element {
       console.warn("Backend sync failed, applying local bypass fallback...");
       
       // FALLBACK: If API fails, manually update the local state 
-      // so the UI still transitions to the DecideScreen.
       const currentUser = useSessionStore.getState().user;
       if (currentUser) {
         useSessionStore.getState().setUser({
@@ -90,6 +102,12 @@ export default function OnboardingScreen(): React.JSX.Element {
             <TouchableOpacity style={styles.primaryButton} onPress={() => nextStep("location")}>
               <Text style={styles.buttonText}>Get Started</Text>
             </TouchableOpacity>
+
+            {__DEV__ && (
+              <TouchableOpacity style={styles.bypassButton} onPress={handleBypass}>
+                <Text style={styles.bypassText}>Developer Bypass</Text>
+              </TouchableOpacity>
+            )}
           </View>
         );
 
@@ -104,7 +122,6 @@ export default function OnboardingScreen(): React.JSX.Element {
             <TouchableOpacity style={styles.primaryButton} onPress={handleLocationRequest} disabled={loading}>
               {loading ? <ActivityIndicator color="#0D0D0D" /> : <Text style={styles.buttonText}>Allow Location</Text>}
             </TouchableOpacity>
-            {/* AMBER UPDATE: Skip option for low-friction flow */}
             <TouchableOpacity onPress={() => nextStep("trust")}>
               <Text style={styles.skipText}>I'll decide where I am later</Text>
             </TouchableOpacity>
@@ -144,7 +161,6 @@ export default function OnboardingScreen(): React.JSX.Element {
               {loading ? <ActivityIndicator color="#0D0D0D" /> : <Text style={styles.buttonText}>Enter HADE</Text>}
             </TouchableOpacity>
 
-            {/* DEV TOOL: Restart onboarding loop for design tweaking */}
             {__DEV__ && (
               <TouchableOpacity onPress={() => setStep("vision")} style={styles.devRestart}>
                 <Text style={styles.devRestartText}>↻ Restart Animation Loop</Text>
@@ -195,5 +211,20 @@ const styles = StyleSheet.create({
   buttonText: { color: "#0D0D0D", fontSize: 18, fontWeight: "700" },
   skipText: { color: "#57534E", textAlign: "center", marginTop: 24, fontWeight: "600", fontSize: 15 },
   devRestart: { marginTop: 40, borderTopWidth: 1, borderTopColor: '#1C1917', paddingTop: 20 },
-  devRestartText: { color: "#444", textAlign: 'center', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 }
+  devRestartText: { color: "#444", textAlign: 'center', fontSize: 12, textTransform: 'uppercase', letterSpacing: 1 },
+  bypassButton: {
+    marginTop: 40,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderColor: "#1C1917",
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  bypassText: {
+    color: "#57534E",
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 1,
+  },
 });

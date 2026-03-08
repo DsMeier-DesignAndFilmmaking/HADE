@@ -58,15 +58,16 @@ async def emit_signal(
         if venue is None:
             venue_id = None
 
-    vibe = (payload.vibe or "").lower()
-    strength = VIBE_STRENGTH.get(vibe, 0.8)
+    vibe = (payload.vibe or "").lower().strip() # Normalize input
+    strength = float(VIBE_STRENGTH.get(vibe, 0.8)) # Ensure it's a float
+    normalized_content = (payload.content or "").strip() or None
 
     signal = Signal(
         id=uuid.uuid4(),
         type=signal_type,
         source_user_id=user_id,
         venue_id=venue_id,
-        content=payload.content,
+        content=normalized_content,
         strength=strength,
         # emitted_at is the "created-at" reference timestamp used by decay logic.
         emitted_at=emitted_at,

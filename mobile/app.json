@@ -33,7 +33,8 @@
       "expo-dev-client",
       "expo-location",
       "expo-asset",
-      "expo-build-properties"
+      "expo-build-properties",
+      "expo-font"
     ]
   }
 }

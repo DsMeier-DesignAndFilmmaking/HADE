@@ -14,12 +14,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.schemas.candidate import Candidate, CandidateSet
 from app.models.micro_event import MicroEvent
 from app.models.user import User
-from app.schemas.common import GeoLocation
 from app.schemas.decide import DecideResponse, OpportunityOut, PrimarySignal, TrustAttribution
 from app.schemas.event import EventInfo
-from app.services.scoring import ScoredCandidate
 
 
 async def _build_event_info(event: MicroEvent, db: AsyncSession) -> EventInfo:
@@ -37,24 +36,62 @@ async def _build_event_info(event: MicroEvent, db: AsyncSession) -> EventInfo:
     )
 
 
+def _format_time_ago(emitted_at: datetime) -> str:
+    """Format signal timestamp as human-readable relative time."""
+    now = datetime.now(timezone.utc)
+    delta = now - emitted_at
+    minutes = int(delta.total_seconds() / 60)
+    if minutes < 5:
+        return "just now"
+    if minutes < 60:
+        return f"{minutes}m ago"
+    hours = minutes // 60
+    if hours < 24:
+        return f"{hours}h ago"
+    days = hours // 24
+    return f"{days}d ago"
+
+
+def _vibe_label_from_strength(strength: float) -> str:
+    """Reverse-map signal strength to a human vibe label."""
+    if strength >= 1.2:
+        return "High Energy"
+    if strength >= 0.8:
+        return "Solid Spot"
+    return "Calm"
+
+
 def _generate_rationale(
-    candidate: ScoredCandidate,
+    candidate: Candidate,
     time_of_day: str,
 ) -> str:
     """Generate a human-readable, confident rationale string.
 
     Voice: Present-tense, personal, confident.
-    DO: "Solid cafe spot. Just 3 min walk. Open now."
+    DO: 'Alex, 2h ago: "the miso ramen."'
     DON'T: "Based on user activity" or "Trending near you."
     """
-    place = candidate.place
     eta = candidate.eta_minutes
-    category = place.category
+    category = candidate.category
 
     # ── With friend signal ──
-    if candidate.has_friend_signal and candidate.matched_signals:
-        # Phase 2 will include the actual friend name from the signal
-        return f"Someone in your circle was here recently. {category} spot, {eta} min walk."
+    if candidate.trust_context.is_friend_checkin and candidate.matched_signals:
+        sig = max(candidate.matched_signals, key=lambda item: item.effective_strength)
+        bundle = candidate.trust_context.signal_bundle
+        name = (
+            bundle.user_first_name
+            if bundle and bundle.user_first_name
+            else candidate.trust_context.operator_name
+            or candidate.trust_context.friend_name
+            or "A friend"
+        )
+        time_ago = _format_time_ago(sig.emitted_at)
+
+        # Verbatim quote when content exists
+        if candidate.trust_context.signal_text:
+            return f'{name}, {time_ago}: "{candidate.trust_context.signal_text}"'
+        interaction = candidate.trust_context.interaction_type or "LIVE_SIGNAL"
+        return f"{name} {interaction.lower()} {time_ago}. {category} spot, {eta} min walk."
 
     # ── Without signal (cold start / Google Places only) ──
     parts: list[str] = []
@@ -76,54 +113,63 @@ def _generate_rationale(
         parts.append(f"{eta} min walk.")
 
     # Open status
-    if place.open_now:
+    if candidate.is_open_now:
         parts.append("Open now.")
 
     # Rating (if strong)
-    if place.rating >= 4.3:
+    if candidate.rating >= 4.3:
         parts.append("Consistently well-regarded.")
 
     return " ".join(parts)
 
 
 def _candidate_to_opportunity_out(
-    candidate: ScoredCandidate,
+    candidate: Candidate,
     is_primary: bool,
     time_of_day: str,
 ) -> OpportunityOut:
-    """Convert a ScoredCandidate into an OpportunityOut response schema."""
-    place = candidate.place
+    """Convert a Candidate into an OpportunityOut response schema."""
     rationale = _generate_rationale(candidate, time_of_day)
 
     # Build trust attributions from matched signals
     trust_attributions: list[TrustAttribution] = []
     primary_signal: PrimarySignal | None = None
 
-    if candidate.has_friend_signal and candidate.matched_signals:
-        # Phase 2: look up actual user names from signal source_user_id
+    if candidate.trust_context.is_friend_checkin and candidate.matched_signals:
+        sig = max(candidate.matched_signals, key=lambda item: item.effective_strength)
+        bundle = candidate.trust_context.signal_bundle
+        name = (
+            bundle.user_first_name
+            if bundle and bundle.user_first_name
+            else candidate.trust_context.operator_name
+            or candidate.trust_context.friend_name
+            or "A friend"
+        )
+        signal_text = candidate.trust_context.signal_text or sig.content or "Checked in nearby"
+        vibe_label = _vibe_label_from_strength(sig.effective_strength)
         trust_attributions.append(
             TrustAttribution(
-                user_name="A friend",
-                signal_summary="was nearby recently",
+                user_name=name,
+                signal_summary=candidate.trust_context.interaction_type or "LIVE_SIGNAL",
+                vibe_label=vibe_label,
             )
         )
-        sig = candidate.matched_signals[0]
         primary_signal = PrimarySignal(
-            user_name="A friend",
+            user_name=name,
             timestamp=sig.emitted_at,
-            vibe_label="Great",
-            comment=sig.content or "Checked in nearby",
+            vibe_label=vibe_label,
+            comment=signal_text,
         )
 
     return OpportunityOut(
         id=uuid.uuid4(),
-        venue_name=place.name,
-        category=place.category,
-        distance_meters=round(candidate.distance_m),
+        venue_name=candidate.venue_name,
+        category=candidate.category,
+        distance_meters=candidate.distance_meters,
         eta_minutes=candidate.eta_minutes,
         rationale=rationale,
         trust_attributions=trust_attributions,
-        geo=GeoLocation(lat=place.lat, lng=place.lng),
+        geo=candidate.geo,
         is_primary=is_primary,
         event=None,  # Phase 2: populate for event-backed opportunities
         primary_signal=primary_signal,
@@ -131,7 +177,7 @@ def _candidate_to_opportunity_out(
 
 
 async def make_decision(
-    candidates: list[ScoredCandidate],
+    candidate_set: CandidateSet,
     context_state_id: uuid.UUID,
     time_of_day: str,
     user_id: uuid.UUID,
@@ -142,6 +188,9 @@ async def make_decision(
     Returns None if no candidate meets the confidence threshold —
     "Nothing great right now" is a valid answer.
     """
+    _ = user_id
+    _ = db
+    candidates = candidate_set.candidates
     if not candidates:
         return None
 

@@ -53,10 +53,10 @@ async def _get_supabase_jwks() -> dict[str, object] | None:
             resp.raise_for_status()
         _jwks_cache = resp.json()
         _jwks_fetched_at = time.monotonic()
-        print(f"[JWKS] Fetched from {url}: {_jwks_cache}")
+        logger.debug("JWKS fetched from %s", url)
         return _jwks_cache
     except Exception as e:
-        print(f"[JWKS] Failed to fetch from {url}: {e}")
+        logger.debug("JWKS fetch failed from %s: %s", url, e)
         return _jwks_cache
 
 
@@ -93,25 +93,24 @@ async def _try_decode_supabase_jwt(
     # Peek at the token header
     try:
         header = jwt.get_unverified_header(token)
-        print(f"[SUPABASE AUTH] Token header: {header}")
-    except Exception as e:
-        print(f"[SUPABASE AUTH] Cannot read token header: {e}")
+    except Exception:
+        logger.debug("Cannot read Supabase token header")
         return None
 
     token_alg = header.get("alg", "unknown")
     token_kid = header.get("kid")
-    print(f"[SUPABASE AUTH] Token alg={token_alg}, kid={token_kid}")
+    logger.debug("Supabase token alg=%s, kid=%s", token_alg, token_kid)
 
     # Fetch JWKS
     jwks_data = await _get_supabase_jwks()
     if jwks_data is None:
-        print("[SUPABASE AUTH] No JWKS available — cannot verify")
+        logger.debug("No JWKS available — cannot verify Supabase token")
         return None
 
     # Find the matching signing key
     keys = jwks_data.get("keys", [])
     if not isinstance(keys, list):
-        print(f"[SUPABASE AUTH] JWKS 'keys' is not a list: {type(keys)}")
+        logger.debug("JWKS 'keys' is not a list: %s", type(keys))
         return None
 
     signing_key = None
@@ -124,14 +123,12 @@ async def _try_decode_supabase_jwt(
         if key_data.get("use", "sig") == "sig":
             try:
                 signing_key = jwk.construct(key_data)
-                print(f"[SUPABASE AUTH] Found matching JWKS key: kid={key_data.get('kid')}")
                 break
-            except Exception as e:
-                print(f"[SUPABASE AUTH] Failed to construct key: {e}")
+            except Exception:
                 continue
 
     if signing_key is None:
-        print(f"[SUPABASE AUTH] No matching key found in JWKS for kid={token_kid}")
+        logger.debug("No matching JWKS key for kid=%s", token_kid)
         return None
 
     # Decode with ES256
@@ -142,14 +139,13 @@ async def _try_decode_supabase_jwt(
             algorithms=["ES256"],
             options={"verify_aud": False},
         )
-        print(f"[SUPABASE AUTH] Decoded Payload: {payload}")
     except Exception as e:
-        print(f"[SUPABASE AUTH] JWT_ERROR_DETAIL: {type(e).__name__}: {e}")
+        logger.debug("Supabase JWT verification failed: %s", type(e).__name__)
         return None
 
     sub = payload.get("sub")
     if sub is None:
-        print("[SUPABASE AUTH] Token decoded but missing 'sub' claim")
+        logger.debug("Supabase token missing 'sub' claim")
         return None
 
     phone: str | None = payload.get("phone")
@@ -157,10 +153,7 @@ async def _try_decode_supabase_jwt(
     app_metadata = payload.get("app_metadata", {})
     provider = app_metadata.get("provider") if isinstance(app_metadata, dict) else None
     is_anonymous = bool(payload.get("is_anonymous", False) or provider == "anonymous")
-    print(
-        f"[SUPABASE AUTH] SUCCESS — sub={sub}, phone={phone}, email={email}, "
-        f"anonymous={is_anonymous}"
-    )
+    logger.debug("Supabase auth resolved: anonymous=%s", is_anonymous)
     return (sub, phone, email, is_anonymous)
 
 
@@ -241,16 +234,13 @@ async def _resolve_auth_context(token: str, db: AsyncSession) -> AuthContext | N
     """Resolve request auth context from either dev JWT or Supabase JWT."""
     dev_user_id = _try_decode_dev_jwt(token)
     if dev_user_id is not None:
-        print(f"[AUTH] Dev JWT matched — user_id={dev_user_id}")
         return AuthContext(user_id=dev_user_id, is_anonymous=False)
 
-    print("[AUTH] Dev JWT did not match, trying Supabase JWT (ES256 via JWKS)...")
     supabase_result = await _try_decode_supabase_jwt(token)
     if supabase_result is None:
         return None
 
     supabase_id, phone, email, is_anonymous = supabase_result
-    print("[AUTH] Supabase JWT matched — provisioning HADE user...")
     hade_user_id = await _get_or_create_user_for_supabase(
         db,
         supabase_id=supabase_id,
@@ -258,7 +248,6 @@ async def _resolve_auth_context(token: str, db: AsyncSession) -> AuthContext | N
         email=email,
         is_anonymous=is_anonymous,
     )
-    print(f"[AUTH] HADE user_id={hade_user_id}, anonymous={is_anonymous}")
     return AuthContext(user_id=hade_user_id, is_anonymous=is_anonymous)
 
 
@@ -276,14 +265,12 @@ async def get_current_user_id(
     On first Supabase login the HADE user is auto-provisioned.
     """
     token = credentials.credentials
-    print(f"\n[AUTH] === get_current_user_id called ===")
-    print(f"[AUTH] Incoming Token: {token[:20]}...")
 
     auth_context = await _resolve_auth_context(token, db)
     if auth_context is not None:
         return auth_context.user_id
 
-    print("[AUTH] Both dev and Supabase JWT failed — returning 401")
+    logger.debug("Auth failed — returning 401")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token",
@@ -296,14 +283,12 @@ async def get_current_auth_context(
 ) -> AuthContext:
     """Validate JWT and return resolved auth context (including anonymous flag)."""
     token = credentials.credentials
-    print(f"\n[AUTH] === get_current_auth_context called ===")
-    print(f"[AUTH] Incoming Token: {token[:20]}...")
 
     auth_context = await _resolve_auth_context(token, db)
     if auth_context is not None:
         return auth_context
 
-    print("[AUTH] Both dev and Supabase JWT failed — returning 401")
+    logger.debug("Auth failed — returning 401")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token",

@@ -62,6 +62,7 @@ async def test_emit_signal_returns_201(client: AsyncClient) -> None:
     assert body["status"] == "ok"
     assert body["data"]["type"] == "PRESENCE"
     assert body["data"]["strength"] == 1.0
+    assert body["data"]["content"] == "Packed and loud"
     assert body["data"]["geo"] == {"lat": 39.7392, "lng": -104.9903}
     assert len(fake_db.added) == 1
 

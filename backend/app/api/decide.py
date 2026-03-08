@@ -10,17 +10,21 @@ Target latency: < 800ms p95.
 import logging
 import time
 import uuid
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_db
 from app.core.security import AuthContext, get_current_auth_context
-from app.schemas.common import ApiResponse, ResponseMeta
+from app.models.venue import Venue
+from app.schemas.common import ApiResponse, ErrorDetail, ResponseMeta
 from app.schemas.decide import DecideRequest, DecideResponse
 from app.services.context_engine import build_context_state
 from app.services.decision_layer import make_decision
 from app.services.google_places import search_nearby
+from app.services.llm_decision import LLM_EMPTY_REASON_DEFAULT, make_llm_decision
 from app.services.scoring import score_candidates
 from app.services.signal_aggregator import aggregate_signals
 from app.services.trust_layer import compute_trust_weights
@@ -32,6 +36,26 @@ router = APIRouter(tags=["decide"])
 # Search radius for venues and signals (meters)
 VENUE_SEARCH_RADIUS_M = 1000
 SIGNAL_SEARCH_RADIUS_M = 1500
+
+
+async def _resolve_place_venue_ids(
+    place_ids: list[str],
+    db: AsyncSession,
+) -> dict[str, UUID]:
+    if not place_ids:
+        return {}
+
+    result = await db.execute(
+        select(Venue.id, Venue.external_id).where(
+            Venue.external_id.in_(place_ids)
+        )
+    )
+
+    mapping: dict[str, UUID] = {}
+    for row in result.all():
+        if row.external_id:
+            mapping[row.external_id] = row.id
+    return mapping
 
 
 @router.post("/decide", response_model=ApiResponse[DecideResponse | None])
@@ -92,12 +116,22 @@ async def decide(
         # ── Layer 3: Trust Layer ──
         if auth_context.is_anonymous:
             # Zero-input guest flow: rely on geo + weather + public signals only.
-            trust_weights = {sig.id: 1.0 for sig in signals}
+            trust_weights = {sig.signal.id: 1.0 for sig in signals}
+            friend_names: dict[UUID, str] = {}
+            user_names: dict[UUID, str] = {}
         else:
-            trust_weights = await compute_trust_weights(signals, auth_context.user_id, db)
+            trust_result = await compute_trust_weights(signals, auth_context.user_id, db)
+            trust_weights = trust_result.weights
+            friend_names = trust_result.friend_names
+            user_names = trust_result.user_names
+
+        place_to_venue_id = await _resolve_place_venue_ids(
+            place_ids=[place.place_id for place in places],
+            db=db,
+        )
 
         # ── Layer 4: Scoring System ──
-        candidates = score_candidates(
+        candidate_set = score_candidates(
             places=places,
             signals=signals,
             trust_weights=trust_weights,
@@ -105,29 +139,60 @@ async def decide(
             user_lat=request.geo.lat,
             user_lng=request.geo.lng,
             radius_m=VENUE_SEARCH_RADIUS_M,
+            friend_names=friend_names,
+            user_names=user_names,
+            place_to_venue_id=place_to_venue_id,
         )
 
-        # ── Layer 5: Decision Layer ──
-        decision = await make_decision(
-            candidates=candidates,
-            context_state_id=context.id,
-            time_of_day=context.time_of_day,
-            user_id=auth_context.user_id,
-            db=db,
-        )
+        # ── Layer 5: Decision Layer (LLM-backed, deterministic fallback) ──
+        empty_reason: str | None = None
+        llm_used = False
+        llm_model = ""
+        try:
+            llm_result = await make_llm_decision(
+                candidate_set=candidate_set,
+                context=context,
+            )
+            llm_used = llm_result.used_llm
+            llm_model = llm_result.model_name
+            decision = llm_result.decision
+            empty_reason = llm_result.empty_reason
+        except Exception:
+            logger.exception("decide: llm decision failed, falling back to deterministic layer")
+            decision = await make_decision(
+                candidate_set=candidate_set,
+                context_state_id=context.id,
+                time_of_day=context.time_of_day,
+                user_id=auth_context.user_id,
+                db=db,
+            )
+            if decision is None:
+                empty_reason = LLM_EMPTY_REASON_DEFAULT
+
+        errors: list[ErrorDetail] = []
+        if decision is None and empty_reason:
+            errors.append(
+                ErrorDetail(
+                    code="INSUFFICIENT_CONTEXT",
+                    message=empty_reason,
+                    detail="No candidate cleared HADE's confidence threshold.",
+                )
+            )
 
         await db.commit()
 
         latency_ms = round((time.monotonic() - start_ms) * 1000)
 
         logger.info(
-            "decide: user=%s anonymous=%s intent=%s places=%d signals=%d candidates=%d latency=%dms",
+            "decide: user=%s anonymous=%s intent=%s places=%d signals=%d candidates=%d llm_used=%s llm_model=%s latency=%dms",
             auth_context.user_id,
             auth_context.is_anonymous,
             request.intent,
             len(places),
             len(signals),
-            len(candidates),
+            len(candidate_set.candidates),
+            llm_used,
+            llm_model,
             latency_ms,
         )
 
@@ -139,6 +204,7 @@ async def decide(
                 latency_ms=latency_ms,
                 context_state_id=context.id,
             ),
+            errors=errors,
         )
 
     except ValueError as e:

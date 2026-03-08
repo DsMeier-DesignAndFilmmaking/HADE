@@ -14,4 +14,14 @@ celery_app.conf.update(
     accept_content=["json"],
     timezone="UTC",
     enable_utc=True,
+    beat_schedule={
+        "expire-stale-signals": {
+            "task": "app.workers.signal_decay.expire_stale_signals",
+            "schedule": 60.0,
+        },
+        "transition-event-statuses": {
+            "task": "app.workers.event_lifecycle.transition_event_statuses",
+            "schedule": 60.0,
+        },
+    },
 )

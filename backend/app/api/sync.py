@@ -6,6 +6,7 @@ the canonical HADE user profile.
 """
 
 import uuid
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -18,13 +19,14 @@ from app.models.user import User
 from app.schemas.common import ApiResponse, ResponseMeta
 from app.schemas.user import UserResponse
 
-router = APIRouter(prefix="/auth", tags=["auth-sync"])
+# Setup basic logging for the Engine
+logger = logging.getLogger(__name__)
 
+router = APIRouter(prefix="/auth", tags=["auth-sync"])
 
 class SyncRequest(BaseModel):
     username: str | None = None
     name: str | None = None
-
 
 @router.post("/sync", response_model=ApiResponse[UserResponse])
 async def sync_user(
@@ -34,44 +36,54 @@ async def sync_user(
 ) -> ApiResponse[UserResponse]:
     """Synchronize a Supabase-authenticated user with the HADE database.
 
-    This is a true upsert — always updates name/username if provided,
-    even if they were previously set.
+    Now includes JIT Provisioning: If the user exists in Supabase Auth but not 
+    in our local public.users table, they are created automatically.
     """
-    print(f"DEBUG: Sync Request Received — user_id={user_id}, body={body}")
+    logger.info(f"[HADE SYNC] Processing sync for user_id: {user_id}")
+    
+    # 1. ATTEMPT TO FETCH LOCAL USER
     user = await db.get(User, user_id)
+    
+    # 2. PROVISIONING BLOCK (The Fix)
     if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found after provisioning",
+        logger.info(f"[HADE SYNC] User {user_id} not found. Provisioning new record...")
+        user = User(
+            id=user_id,
+            supabase_id=user_id, # Linking the UUIDs
+            onboarding_complete=False
         )
+        db.add(user)
+        # We don't commit yet to allow field updates in the same transaction
 
-    # Update name if provided
+    # 3. METADATA UPDATES
     if body.name is not None:
         user.name = body.name.strip()
 
-    # Update username if provided — check uniqueness first
     if body.username is not None:
         clean_username = body.username.strip().lower()
         if clean_username:
-            existing = await db.execute(
-                select(User).where(
-                    User.username == clean_username,
-                    User.id != user_id,
-                )
-            )
-            if existing.scalar_one_or_none() is not None:
+            # Check for username collisions
+            stmt = select(User).where(User.username == clean_username, User.id != user_id)
+            result = await db.execute(stmt)
+            if result.scalar_one_or_none() is not None:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Username already taken",
                 )
             user.username = clean_username
+            user.onboarding_complete = True
 
-    # Mark onboarding complete once a username is set (name is optional)
-    if user.username:
-        user.onboarding_complete = True
-
-    await db.commit()
-    await db.refresh(user)
+    # 4. PERSIST CHANGES
+    try:
+        await db.commit()
+        await db.refresh(user)
+    except Exception as e:
+        await db.rollback()
+        logger.error(f"[HADE SYNC] Database Error: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to synchronize user data"
+        )
 
     return ApiResponse(
         status="ok",

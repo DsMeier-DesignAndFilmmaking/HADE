@@ -7,6 +7,8 @@ import type {
   DecideResponse,
   EventCreate,
   EventResponse,
+  MomentCreate,
+  MomentResponse,
   Signal,
   SignalCreate,
   SignalNearbyResponse,
@@ -16,15 +18,22 @@ import type {
   Venue,
 } from "../types";
 
-const API_BASE = (process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:8000")
-  .replace(/\s+/g, "")
-  .replace(/\/+$/, "");
+// 1. Normalize the base URL from the environment
+const API_BASE = (process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.0.145:8000")
+  .trim()                    // Remove leading/trailing spaces
+  .replace(/\s+/g, "")       // Remove any internal spaces (like the one in your logs)
+  .replace(/\/+$/, "");      // Remove any trailing slashes
 
-export const api = axios.create({
-  baseURL: `${API_BASE}/api/v1`,
-  headers: { "Content-Type": "application/json" },
-  timeout: 10_000,
-});
+// 2. Determine if /api/v1 is already present in the env variable
+// This prevents the "v1/api/v1" double-path error
+const FINAL_BASE_URL = API_BASE.includes("/api/v1") 
+  ? API_BASE 
+  : `${API_BASE}/api/v1`;
+
+  export const api = axios.create({
+    baseURL: API_BASE.includes("/api/v1") ? API_BASE : `${API_BASE}/api/v1`,
+    headers: { "Content-Type": "application/json" },
+  });
 
 // Inject Bearer token on every outgoing request
 api.interceptors.request.use((config) => {
@@ -62,6 +71,13 @@ export async function postSignal(
   params: SignalCreate,
 ): Promise<ApiResponse<Signal>> {
   const { data } = await api.post<ApiResponse<Signal>>("/signals", params);
+  return data;
+}
+
+export async function postMoment(
+  params: MomentCreate,
+): Promise<ApiResponse<MomentResponse>> {
+  const { data } = await api.post<ApiResponse<MomentResponse>>("/moments", params);
   return data;
 }
 
@@ -122,6 +138,7 @@ export async function dismissMoment(
 export async function postAuthSync(
   params: { username?: string; name?: string },
 ): Promise<ApiResponse<User>> {
+  // Now this relative path will correctly append to the normalized base
   const { data } = await api.post<ApiResponse<User>>("/auth/sync", params);
   return data;
 }

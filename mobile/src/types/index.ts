@@ -50,6 +50,7 @@ export interface Venue {
 export interface TrustAttribution {
   user_name: string;
   signal_summary: string;
+  vibe_label?: string;
 }
 
 export interface PrimarySignal {
@@ -88,6 +89,26 @@ export interface DecideResponse {
   primary: Opportunity;
   fallbacks: Opportunity[];
   context_state_id: string;
+}
+
+export type MomentAction = "ACCEPTED" | "DISMISSED" | "IGNORED";
+
+export interface MomentCreate {
+  context_state_id: string;
+  opportunity_id: string;
+  action: MomentAction;
+  venue_id?: string | null;
+}
+
+export interface MomentResponse {
+  id: string;
+  context_state_id: string;
+  opportunity_id: string;
+  action: MomentAction;
+  acted_on: boolean;
+  dismissed: boolean;
+  acted_at: string | null;
+  surfaced_at: string;
 }
 
 export type Intent = "eat" | "drink" | "chill" | "scene" | "anything";
