@@ -8,15 +8,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ActivityIndicator, StyleSheet, View } from "react-native";
 import { GestureHandlerRootView } from 'react-native-gesture-handler'; // Fixed: Added Root View
 
+import type { RootStackParamList } from "./src/types";
 import { useSessionStore } from "./src/store/useSessionStore";
-import { postAuthSync } from "./src/services/api";
 import { signInAnonymously } from "./src/services/auth";
 import { supabase } from "./src/lib/supabase";
-import type { User } from "./src/types";
 
 // Screens
 import AuthScreen from "./src/screens/AuthScreen";
-import OnboardingScreen from "./src/screens/OnboardingScreen";
+import ZeroAuthOnboardingScreen from "./src/screens/ZeroAuthOnboardingScreen";
 import DecideScreen from "./src/screens/DecideScreen";
 import DebugScreen from "./src/screens/DebugScreen";
 import ProfileScreen from "./src/screens/ProfileScreen";
@@ -27,13 +26,14 @@ import MapSurface from "./src/screens/MapSurface";
 // Components
 import DevNavOverlay from "./src/components/DevNavOverlay";
 
-const Stack = createNativeStackNavigator();
+const Stack = createNativeStackNavigator<RootStackParamList>();
 const queryClient = new QueryClient();
 
 export default function App(): React.JSX.Element {
   const isAuthenticated = useSessionStore((s) => s.isAuthenticated);
   const user = useSessionStore((s) => s.user);
   const initialize = useSessionStore((s) => s.initialize);
+  const authLoading = useSessionStore((s) => s.authLoading);
   const [authBootstrapComplete, setAuthBootstrapComplete] = useState(false);
 
   useEffect(() => {
@@ -64,49 +64,29 @@ export default function App(): React.JSX.Element {
     return () => { cancelled = true; };
   }, []);
 
-  // Sync user profile from backend after Supabase auth is confirmed.
-  // App.tsx - Revised syncUser Effect
-useEffect(() => {
-  if (!isAuthenticated || user !== null) return;
-
-  const syncUser = async () => {
-    try {
-      // 1. Get the actual session token from Supabase
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      if (session?.access_token) {
-        // 2. Pass the token so the backend can verify the user
-        const resp = await postAuthSync({ token: session.access_token } as any);
-        
-        if (resp.data) {
-          useSessionStore.getState().setUser(resp.data);
-          return;
-        }
-      }
-    } catch (err) {
-      // This is where your current warning is coming from
-      console.warn("[App] Backend sync failed — attempting fallback", err);
-    }
-
-    // Fallback logic remains as your safety net...
-    try {
-      const { data: { user: supaUser } } = await supabase.auth.getUser();
-      if (supaUser) {
-        // ... (your existing localUser mapping)
-      }
-    } catch (err) {
-      console.warn("[App] Auth sync critical failure", err);
-    }
-  };
-
-  syncUser();
-}, [isAuthenticated, user]);
+  // Note: user sync (postAuthSync → syncOrFallback) is owned entirely by
+  // AuthScreen.tsx. The isAuthenticated && !user useEffect there handles all
+  // auth paths (Google, phone OTP, email). A duplicate sync here was causing
+  // startup warnings and a race condition that triggered the 401 interceptor.
 
   const hasUser = user !== null;
   const showHome = hasUser && user.onboarding_complete;
-  const showOnboarding = hasUser && !user.onboarding_complete;
+  // Single onboarding flag — covers both anonymous sessions (no HADE user) and
+  // authenticated users who have not yet completed onboarding.
+  // Both paths now lead to the same Modern McGee ZeroAuth 3-step flow.
+  const showOnboarding = isAuthenticated && !showHome;
 
   if (!authBootstrapComplete) {
+    return (
+      <View style={styles.bootstrapContainer}>
+        <ActivityIndicator size="small" color="#F59E0B" />
+      </View>
+    );
+  }
+
+  // Overlay during Google OAuth handshake — prevents navigation flicker
+  // while exchangeCodeForSession + backend sync are in-flight.
+  if (authLoading && !user) {
     return (
       <View style={styles.bootstrapContainer}>
         <ActivityIndicator size="small" color="#F59E0B" />
@@ -138,7 +118,7 @@ useEffect(() => {
                 <Stack.Screen name="Debug" component={DebugScreen} />
               </Stack.Group>
             ) : showOnboarding ? (
-              <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+              <Stack.Screen name="Onboarding" component={ZeroAuthOnboardingScreen} />
             ) : (
               <Stack.Screen name="Auth">
                 {(props) => (

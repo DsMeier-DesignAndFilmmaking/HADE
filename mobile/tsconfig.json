@@ -2,13 +2,12 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "noImplicitOverride": true,
-    "forceConsistentCasingInFileNames": true,
-    "skipLibCheck": true,
-    "types": [],
+    "module": "esnext", 
+    "moduleResolution": "node",
+    "lib": ["esnext", "dom"],
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./*"]
+      "@/*": ["./src/*"]
     }
   }
 }

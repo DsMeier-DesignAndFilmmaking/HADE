@@ -1,5 +1,10 @@
+import * as WebBrowser from "expo-web-browser";
+import * as Linking from "expo-linking";
 import { supabase } from "../lib/supabase";
 import { useSessionStore } from "../store/useSessionStore";
+
+// Required for auth sessions to close correctly when returning from OAuth browser
+WebBrowser.maybeCompleteAuthSession();
 
 // ---------------------------------------------------------------------------
 // Phone auth — OTP (requires SMS provider like Twilio for non-test numbers)
@@ -25,6 +30,87 @@ export async function verifyOtp(
 export async function signInAnonymously(): Promise<void> {
   const { error } = await supabase.auth.signInAnonymously();
   if (error) throw new Error(error.message);
+}
+
+// ---------------------------------------------------------------------------
+// Google OAuth — PKCE flow via Supabase + expo-web-browser
+// ---------------------------------------------------------------------------
+
+/**
+ * Opens the Google consent screen in the system browser using the PKCE flow.
+ *
+ * PKCE requires an explicit code exchange step: after the browser redirects
+ * back to `hade://auth/callback?code=XXX`, we must call
+ * `exchangeCodeForSession` to trade the code for a real session. Without this
+ * call the auth code is silently discarded and no session is ever created.
+ *
+ * We also eagerly hydrate the Zustand store so the Axios interceptor in
+ * `api.ts` can read the access token synchronously in the same call stack as
+ * `syncOrFallback()` — `onAuthStateChange` is async and may lag behind.
+ */
+/**
+ * Returns the OAuth callback URI for the current runtime environment.
+ *   iPhone Simulator / Physical Device → hade://auth/callback
+ *   Expo Web (http://10.0.0.145:<port>)  → http://10.0.0.145:<port>/auth/callback
+ *
+ * This URL must be registered in:
+ *   Supabase → Authentication → URL Configuration → Redirect URLs
+ */
+function getRedirectUri(): string {
+  const uri = Linking.createURL("auth/callback");
+  if (__DEV__) {
+    console.log("[OAuth] Redirect URI →", uri);
+  }
+  return uri;
+}
+
+export async function signInWithGoogle(): Promise<void> {
+  const redirectUri = getRedirectUri();
+
+  const { data, error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: redirectUri,
+      skipBrowserRedirect: true,
+    },
+  });
+
+  if (error) throw new Error(error.message);
+  if (!data.url) throw new Error("No OAuth URL returned from Supabase");
+
+  const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUri);
+
+  // 'cancel' means the user dismissed the browser — not an error worth surfacing
+  if (result.type !== "success") {
+    throw new Error("Google sign-in was cancelled");
+  }
+
+  // Parse Supabase/Google error from the callback URL BEFORE exchanging.
+  // If hade://auth/callback is not in Supabase's Allowed Redirect URLs,
+  // Supabase immediately returns ?error=redirect_uri_not_allowed without ever
+  // showing Google's consent screen — this is the "sheet flashes and closes"
+  // symptom on iOS. Surface the error description so it's diagnosable.
+  const callbackUrl = new URL(result.url);
+  const oauthError = callbackUrl.searchParams.get("error");
+  const oauthErrorDesc = callbackUrl.searchParams.get("error_description");
+  if (oauthError) {
+    throw new Error(
+      oauthErrorDesc
+        ? oauthErrorDesc.replace(/\+/g, " ")
+        : oauthError,
+    );
+  }
+
+  // PKCE: exchange the auth code in the redirect URL for a Supabase session.
+  const { data: sessionData, error: sessionError } =
+    await supabase.auth.exchangeCodeForSession(result.url);
+  if (sessionError) throw new Error(sessionError.message);
+
+  // Eagerly push the session into Zustand so syncOrFallback() can read the
+  // access token immediately without waiting for onAuthStateChange to fire.
+  if (sessionData.session) {
+    useSessionStore.getState().setSession(sessionData.session);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1,241 +1,147 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
   StyleSheet,
+  View,
   Text,
   TextInput,
-  View,
+  Pressable,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  Animated,
 } from "react-native";
-import { postEvent } from "../services/api";
-import { useSessionStore } from "../store/useSessionStore";
-import type { EventVisibility, Intent } from "../types";
 
-interface CreateEventSheetProps {
+interface CreateMoveSheetProps {
   visible: boolean;
   onClose: () => void;
 }
 
-const CATEGORIES: Intent[] = ["eat", "drink", "chill", "scene"];
-const TIME_OPTIONS = [
-  { label: "Now", value: 0 },
-  { label: "In 1hr", value: 60 },
-  { label: "In 2hrs", value: 120 },
-];
-const VISIBILITY_OPTIONS: { label: string; value: EventVisibility }[] = [
-  { label: "Friends", value: "TRUST_NETWORK" },
-  { label: "Extended", value: "EXTENDED" },
-  { label: "Open", value: "OPEN" },
-];
-
-export default function CreateEventSheet({
-  visible,
-  onClose,
-}: CreateEventSheetProps): React.JSX.Element {
-  const location = useSessionStore((s) => s.location);
-
+export default function CreateMoveSheet({ onClose }: CreateMoveSheetProps): React.JSX.Element {
   const [title, setTitle] = useState("");
-  const [category, setCategory] = useState<Intent>("drink");
-  const [timeOffset, setTimeOffset] = useState(0);
-  const [visibility, setVisibility] = useState<EventVisibility>("TRUST_NETWORK");
-  const [note, setNote] = useState("");
-  const [showNote, setShowNote] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
+  const [intent, setIntent] = useState("DRINK");
+  const [decayHours, setDecayHours] = useState(3);
+  const [isRecording, setIsRecording] = useState(false);
 
-  const canSubmit = title.trim().length > 0 && !submitting;
+  const INTENTS = ["DRINK", "EAT", "CHILL", "SCENE"];
+  const DECAY_OPTIONS = [1, 3, 6];
 
-  const handleSubmit = async () => {
-    if (!canSubmit) return;
+  // Animation for the Voice Signal Pulse
+  const pulseAnim = useRef(new Animated.Value(1)).current;
 
-    setSubmitting(true);
-    try {
-      const startsAt =
-        timeOffset > 0
-          ? new Date(Date.now() + timeOffset * 60_000).toISOString()
-          : undefined;
-
-      await postEvent({
-        title: title.trim(),
-        note: note.trim() || undefined,
-        category,
-        geo: location || { lat: 39.7541, lng: -104.9998 },
-        starts_at: startsAt || undefined,
-        duration_minutes: 120,
-        visibility,
-      });
-
-      Alert.alert("You're live", "Your event is out there.");
-      resetAndClose();
-    } catch {
-      // Optimistic close for design mode
-      Alert.alert("You're live", "Your event is out there.");
-      resetAndClose();
+  useEffect(() => {
+    if (isRecording) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1.2, duration: 400, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+        ])
+      ).start();
+    } else {
+      pulseAnim.setValue(1);
     }
-  };
+  }, [isRecording]);
 
-  const resetAndClose = () => {
-    setTitle("");
-    setCategory("drink");
-    setTimeOffset(0);
-    setVisibility("TRUST_NETWORK");
-    setNote("");
-    setShowNote(false);
-    setSubmitting(false);
-    onClose();
+  const handleVoiceCapture = () => {
+    setIsRecording(!isRecording);
+    // Logic for Speech-to-Text would be triggered here
   };
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      presentationStyle="pageSheet"
-      onRequestClose={resetAndClose}
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={styles.container}
     >
-      <KeyboardAvoidingView
-        style={styles.container}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
-        <ScrollView contentContainerStyle={styles.content}>
-          {/* Handle bar */}
-          <View style={styles.handle} />
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        {/* Terminal Header */}
+        <View style={styles.header}>
+          <Text style={styles.terminalLine}>$ SIGNAL_INITIATED...</Text>
+          <Text style={styles.mainHeading}>BROADCAST A MOVE</Text>
+        </View>
 
-          {/* Header */}
-          <Text style={styles.heading}>WHAT&apos;S THE MOVE?</Text>
+        {/* Primary Input Section with Voice CTA */}
+        <View style={styles.inputSection}>
+          <View style={styles.labelRow}>
+            
+            <Pressable 
+              onPress={handleVoiceCapture} 
+              style={[styles.voiceTrigger, isRecording && styles.voiceTriggerActive]}
+            >
+              <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                <Text style={[styles.voiceIcon, isRecording && { color: '#0D0D0D' }]}>🎤</Text>
+              </Animated.View>
+              <Text style={[styles.voiceText, isRecording && { color: '#0D0D0D' }]}>
+                {isRecording ? "LISTENING..." : "VOICE_INTENT"}
+              </Text>
+            </Pressable>
+          </View>
 
-          {/* Title Input */}
           <TextInput
-            style={styles.titleInput}
-            placeholder="Drinks on my rooftop"
-            placeholderTextColor="#57534E"
+            style={[styles.hugeInput, isRecording && { color: '#F59E0B' }]}
+            placeholder="Rooftop Negronis"
+            placeholderTextColor="#262626"
             value={title}
             onChangeText={setTitle}
-            maxLength={80}
+            maxLength={40}
             autoFocus
           />
+        </View>
 
-          {/* Category Chips */}
-          <Text style={styles.label}>CATEGORY</Text>
+        {/* Intent Calibration */}
+        <View style={styles.section}>
+          <Text style={styles.label}>[02] SYSTEM_INTENT</Text>
           <View style={styles.chipRow}>
-            {CATEGORIES.map((cat) => (
+            {INTENTS.map((item) => (
               <Pressable
-                key={cat}
-                onPress={() => setCategory(cat)}
-                style={[
-                  styles.chip,
-                  category === cat && styles.chipActive,
-                ]}
+                key={item}
+                onPress={() => setIntent(item)}
+                style={[styles.chip, intent === item && styles.chipActive]}
               >
-                <Text
-                  style={[
-                    styles.chipText,
-                    category === cat && styles.chipTextActive,
-                  ]}
-                >
-                  {cat.toUpperCase()}
+                <Text style={[styles.chipText, intent === item && styles.chipTextActive]}>
+                  {item}
                 </Text>
               </Pressable>
             ))}
           </View>
+        </View>
 
-          {/* Location */}
-          <Text style={styles.label}>LOCATION</Text>
-          <Pressable style={styles.locationRow}>
-            <Text style={styles.locationIcon}>📍</Text>
-            <Text style={styles.locationText}>
-              {location
-                ? `${location.lat.toFixed(4)}, ${location.lng.toFixed(4)}`
-                : "Current location"}
-            </Text>
-            <Text style={styles.locationChange}>Change</Text>
-          </Pressable>
-
-          {/* Time */}
-          <Text style={styles.label}>WHEN</Text>
+        {/* Decay Window Calibration */}
+        <View style={styles.section}>
+          <Text style={styles.label}>[03] DECAY_WINDOW (HOURS)</Text>
           <View style={styles.chipRow}>
-            {TIME_OPTIONS.map((opt) => (
+            {DECAY_OPTIONS.map((hr) => (
               <Pressable
-                key={opt.value}
-                onPress={() => setTimeOffset(opt.value)}
-                style={[
-                  styles.chip,
-                  timeOffset === opt.value && styles.chipActive,
-                ]}
+                key={hr}
+                onPress={() => setDecayHours(hr)}
+                style={[styles.chip, decayHours === hr && styles.chipActive]}
               >
-                <Text
-                  style={[
-                    styles.chipText,
-                    timeOffset === opt.value && styles.chipTextActive,
-                  ]}
-                >
-                  {opt.label}
+                <Text style={[styles.chipText, decayHours === hr && styles.chipTextActive]}>
+                  {hr}H
                 </Text>
               </Pressable>
             ))}
           </View>
+        </View>
 
-          {/* Visibility */}
-          <Text style={styles.label}>WHO CAN SEE</Text>
-          <View style={styles.chipRow}>
-            {VISIBILITY_OPTIONS.map((opt) => (
-              <Pressable
-                key={opt.value}
-                onPress={() => setVisibility(opt.value)}
-                style={[
-                  styles.chip,
-                  visibility === opt.value && styles.chipActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.chipText,
-                    visibility === opt.value && styles.chipTextActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+        {/* Footer Metrics */}
+        <View style={styles.footerMetrics}>
+          <Text style={styles.metricText}>GEO_TAG: ACTIVE</Text>
+          <Text style={styles.metricText}>TRUST_WEIGHT: 1.0</Text>
+          <Text style={styles.metricText}>AUTO_PURGE: ENABLED</Text>
+        </View>
 
-          {/* Optional Note */}
-          {!showNote ? (
-            <Pressable onPress={() => setShowNote(true)}>
-              <Text style={styles.addNote}>+ Add a note...</Text>
-            </Pressable>
-          ) : (
-            <TextInput
-              style={styles.noteInput}
-              placeholder="BYOB, access code is 4421..."
-              placeholderTextColor="#57534E"
-              value={note}
-              onChangeText={setNote}
-              maxLength={200}
-              multiline
-            />
-          )}
+        {/* Action Button */}
+        <Pressable 
+          style={[styles.broadcastButton, !title && styles.broadcastDisabled]}
+          onPress={onClose}
+        >
+          <Text style={styles.broadcastText}>GO LIVE</Text>
+        </Pressable>
 
-          {/* Submit */}
-          <Pressable
-            style={[styles.submitButton, !canSubmit && styles.submitDisabled]}
-            onPress={handleSubmit}
-            disabled={!canSubmit}
-          >
-            <Text style={styles.submitText}>
-              {submitting ? "Going live..." : "Go live"}
-            </Text>
-          </Pressable>
-
-          {/* Cancel */}
-          <Pressable onPress={resetAndClose} style={styles.cancelButton}>
-            <Text style={styles.cancelText}>Cancel</Text>
-          </Pressable>
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </Modal>
+        <Pressable onPress={onClose} style={styles.cancelButton}>
+          <Text style={styles.cancelText}>ABORT_SESSION</Text>
+        </Pressable>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -244,137 +150,142 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#0D0D0D",
   },
-  content: {
+  scrollContent: {
     padding: 24,
     paddingTop: 12,
-    paddingBottom: 48,
   },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#57534E",
-    alignSelf: "center",
-    marginBottom: 24,
+  header: {
+    marginBottom: 40,
   },
-  heading: {
-    color: "#57534E",
-    fontSize: 11,
-    fontWeight: "800",
-    letterSpacing: 1.5,
+  terminalLine: {
+    color: "#F59E0B",
+    fontSize: 10,
+    fontFamily: Platform.OS === "ios" ? "Courier" : "monospace",
+    letterSpacing: 1,
+    opacity: 0.6,
+  },
+  mainHeading: {
+    color: "#FAFAF8",
+    fontSize: 14,
+    fontWeight: "900",
+    letterSpacing: 3,
+    marginTop: 4,
+  },
+  inputSection: {
+    marginBottom: 48,
+  },
+  labelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
     marginBottom: 16,
   },
-  titleInput: {
-    backgroundColor: "#1A1A1A",
-    borderRadius: 12,
-    padding: 18,
-    color: "#FAFAF8",
-    fontSize: 18,
-    fontWeight: "600",
+  voiceTrigger: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#141414',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 4,
     borderWidth: 1,
-    borderColor: "#262626",
-    marginBottom: 24,
+    borderColor: '#1C1917',
+  },
+  voiceTriggerActive: {
+    backgroundColor: '#F59E0B',
+    borderColor: '#F59E0B',
+  },
+  voiceIcon: {
+    fontSize: 12,
+    marginRight: 6,
+    color: '#F59E0B',
+  },
+  voiceText: {
+    color: '#F59E0B',
+    fontSize: 9,
+    fontWeight: '900',
+    letterSpacing: 1,
   },
   label: {
     color: "#57534E",
-    fontSize: 11,
-    fontWeight: "800",
+    fontSize: 10,
+    fontWeight: "900",
     letterSpacing: 1.5,
-    marginBottom: 10,
-    marginTop: 8,
+  },
+  hugeInput: {
+    color: "#FAFAF8",
+    fontSize: 40,
+    fontWeight: "800",
+    letterSpacing: -1.5,
+    padding: 0,
+  },
+  section: {
+    marginBottom: 32,
   },
   chipRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
     gap: 10,
-    marginBottom: 20,
   },
   chip: {
-    backgroundColor: "#1A1A1A",
+    backgroundColor: "#141414",
     paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 10,
+    paddingHorizontal: 20,
+    borderRadius: 4,
     borderWidth: 1,
-    borderColor: "#262626",
+    borderColor: "#1C1917",
   },
   chipActive: {
     backgroundColor: "#F59E0B",
     borderColor: "#F59E0B",
   },
   chipText: {
-    color: "#A8A29E",
-    fontWeight: "700",
+    color: "#57534E",
     fontSize: 12,
+    fontWeight: "800",
+    letterSpacing: 1,
   },
   chipTextActive: {
     color: "#0D0D0D",
   },
-  locationRow: {
+  footerMetrics: {
     flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#1A1A1A",
-    borderRadius: 12,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: "#262626",
-    marginBottom: 20,
+    justifyContent: "space-between",
+    paddingVertical: 20,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "#141414",
+    marginBottom: 40,
   },
-  locationIcon: {
-    fontSize: 16,
-    marginRight: 10,
-  },
-  locationText: {
-    color: "#FAFAF8",
-    fontSize: 14,
-    flex: 1,
-  },
-  locationChange: {
-    color: "#F59E0B",
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  addNote: {
-    color: "#A8A29E",
-    fontSize: 14,
-    marginBottom: 24,
-    marginTop: 4,
-  },
-  noteInput: {
-    backgroundColor: "#1A1A1A",
-    borderRadius: 12,
-    padding: 14,
-    color: "#FAFAF8",
-    fontSize: 14,
-    borderWidth: 1,
-    borderColor: "#262626",
-    minHeight: 60,
-    marginBottom: 24,
-    textAlignVertical: "top",
-  },
-  submitButton: {
-    backgroundColor: "#F59E0B",
-    paddingVertical: 18,
-    borderRadius: 14,
-    alignItems: "center",
-    marginTop: 8,
-  },
-  submitDisabled: {
-    opacity: 0.4,
-  },
-  submitText: {
-    color: "#0D0D0D",
+  metricText: {
+    color: "#262626",
+    fontSize: 9,
     fontWeight: "900",
-    fontSize: 16,
-    textTransform: "uppercase",
     letterSpacing: 1,
   },
-  cancelButton: {
-    paddingVertical: 16,
+  broadcastButton: {
+    backgroundColor: "#F59E0B",
+    paddingVertical: 22,
+    borderRadius: 2,
     alignItems: "center",
   },
+  broadcastDisabled: {
+    backgroundColor: "#141414",
+    opacity: 0.5,
+  },
+  broadcastText: {
+    color: "#0D0D0D",
+    fontSize: 16,
+    fontWeight: "900",
+    letterSpacing: 4,
+  },
+  cancelButton: {
+    marginTop: 24,
+    alignItems: "center",
+    paddingBottom: 40,
+  },
   cancelText: {
-    color: "#57534E",
-    fontSize: 14,
-    fontWeight: "600",
+    color: "#262626",
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 2,
   },
 });

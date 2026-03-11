@@ -36,26 +36,29 @@ async def sync_user(
 ) -> ApiResponse[UserResponse]:
     """Synchronize a Supabase-authenticated user with the HADE database.
 
-    Now includes JIT Provisioning: If the user exists in Supabase Auth but not 
-    in our local public.users table, they are created automatically.
+    ``get_current_user_id`` (deps.py) always auto-provisions the HADE user row
+    before this handler is called, so ``user`` should never be None here.
+    If it is, that indicates a data-integrity problem worth surfacing clearly.
     """
-    logger.info(f"[HADE SYNC] Processing sync for user_id: {user_id}")
-    
-    # 1. ATTEMPT TO FETCH LOCAL USER
-    user = await db.get(User, user_id)
-    
-    # 2. PROVISIONING BLOCK (The Fix)
-    if user is None:
-        logger.info(f"[HADE SYNC] User {user_id} not found. Provisioning new record...")
-        user = User(
-            id=user_id,
-            supabase_id=user_id, # Linking the UUIDs
-            onboarding_complete=False
-        )
-        db.add(user)
-        # We don't commit yet to allow field updates in the same transaction
+    logger.info("[HADE SYNC] Processing sync for user_id: %s", user_id)
 
-    # 3. METADATA UPDATES
+    # 1. FETCH LOCAL USER (always exists — provisioned by deps.py in this request)
+    user = await db.get(User, user_id)
+
+    if user is None:
+        # This should never happen: deps.py commits the user before we get here.
+        # Surface it as a 500 so it is visible in logs rather than silently
+        # attempting to create a duplicate with incorrect field values.
+        logger.error(
+            "[HADE SYNC] User %s not found after auth validation — data integrity error",
+            user_id,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="User record not found after authentication",
+        )
+
+    # 2. METADATA UPDATES
     if body.name is not None:
         user.name = body.name.strip()
 

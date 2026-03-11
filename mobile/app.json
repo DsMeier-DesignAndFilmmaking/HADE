@@ -14,7 +14,28 @@
         "googleMapsApiKey": "AIzaSyCq1zFRvMSJsWjwCXNN4G-A5-MFDZJs_R0"
       },
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "HADE needs your location to find the right spot nearby."
+        "NSLocationWhenInUseUsageDescription": "HADE needs your location to find the right spot nearby.",
+        "LSApplicationQueriesSchemes": [
+          "maps",
+          "comgooglemaps",
+          "geo"
+        ],
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLSchemes": [
+              "hade",
+              "com.googleusercontent.apps.820290079123-etu70nt01v70fpgo4cum6i0t9fsernas"
+            ]
+          }
+        ],
+        "NSAppTransportSecurity": {
+          "NSExceptionDomains": {
+            "10.0.0.145": {
+              "NSExceptionAllowsInsecureHTTPLoads": true,
+              "NSIncludesSubdomains": false
+            }
+          }
+        }
       }
     },
     "android": {
@@ -26,7 +47,9 @@
       },
       "permissions": [
         "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION"
+        "ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
       ]
     },
     "plugins": [
@@ -35,6 +58,11 @@
       "expo-asset",
       "expo-build-properties",
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "698afa3a-1be6-4577-822b-2d0937e1befd"
+      }
+    }
   }
 }

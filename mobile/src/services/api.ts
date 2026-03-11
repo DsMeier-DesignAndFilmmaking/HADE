@@ -20,45 +20,72 @@ import type {
 
 // 1. Normalize the base URL from the environment
 const API_BASE = (process.env.EXPO_PUBLIC_API_URL ?? "http://10.0.0.145:8000")
-  .trim()                    // Remove leading/trailing spaces
-  .replace(/\s+/g, "")       // Remove any internal spaces (like the one in your logs)
-  .replace(/\/+$/, "");      // Remove any trailing slashes
+  .trim()                    
+  .replace(/\s+/g, "")       
+  .replace(/\/+$/, "");      
 
-// 2. Determine if /api/v1 is already present in the env variable
-// This prevents the "v1/api/v1" double-path error
+// 2. Ensure /api/v1 is appended correctly
 const FINAL_BASE_URL = API_BASE.includes("/api/v1") 
   ? API_BASE 
   : `${API_BASE}/api/v1`;
 
-  export const api = axios.create({
-    baseURL: API_BASE.includes("/api/v1") ? API_BASE : `${API_BASE}/api/v1`,
-    headers: { "Content-Type": "application/json" },
-  });
+export const api = axios.create({
+  baseURL: FINAL_BASE_URL,
+  headers: { "Content-Type": "application/json" },
+  timeout: 30000,
+});
 
 // Inject Bearer token on every outgoing request
 api.interceptors.request.use((config) => {
   const token = useSessionStore.getState().supabaseSession?.access_token;
-  console.log("[HADE API] Sending Token:", token ? `${token.slice(0, 20)}...` : "NULL/UNDEFINED");
-  console.log("[HADE API] Request URL:", config.baseURL, config.url);
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
 });
 
-// On 401, clear auth state and sign out of Supabase
+// Endpoints called DURING the auth setup flow — a 401 here means the backend
+// hasn't yet validated the fresh token, not that the user's session is stale.
+// Signing out in response to these 401s would destroy the just-issued session.
+const AUTO_SIGNOUT_EXEMPT = ["/auth/sync", "/auth/migrate"];
+
+// On 401, clear auth state and sign out — but never during auth setup.
 api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (axios.isAxiosError(error) && error.response?.status === 401) {
-      supabase.auth.signOut();
-      useSessionStore.getState().clearAuth();
+      const url = error.config?.url ?? "";
+      const isAuthSetup = AUTO_SIGNOUT_EXEMPT.some((p) => url.includes(p));
+      if (!isAuthSetup) {
+        supabase.auth.signOut();
+        useSessionStore.getState().clearAuth();
+      }
     }
     return Promise.reject(error);
   },
 );
 
-// --- Endpoint helpers (typed to match Pydantic schemas) ---
+// --- Auth & Migration Endpoints ---
+
+/**
+ * FIX: Explicitly exported for the dynamic import in useAuthStore.ts
+ * Hits the FastAPI endpoint to transfer data from guest_id to the new user
+ */
+export async function migrateGuestSession(guestId: string): Promise<ApiResponse<User>> {
+  const { data } = await api.post<ApiResponse<User>>("/auth/migrate", { 
+    guest_id: guestId 
+  });
+  return data;
+}
+
+export async function postAuthSync(
+  params: { username?: string; name?: string },
+): Promise<ApiResponse<User>> {
+  const { data } = await api.post<ApiResponse<User>>("/auth/sync", params);
+  return data;
+}
+
+// --- Spontaneity Engine Endpoints ---
 
 export async function postDecide(
   params: DecideRequest,
@@ -93,12 +120,7 @@ export async function getNearbySignals(params: {
   return data;
 }
 
-export async function getVenue(
-  venueId: string,
-): Promise<ApiResponse<Venue>> {
-  const { data } = await api.get<ApiResponse<Venue>>(`/venues/${venueId}`);
-  return data;
-}
+// --- User & Social Endpoints ---
 
 export async function getMe(): Promise<ApiResponse<User>> {
   const { data } = await api.get<ApiResponse<User>>("/user/me");
@@ -117,77 +139,7 @@ export async function getTrustNetwork(): Promise<ApiResponse<TrustNetworkRespons
   return data;
 }
 
-export async function actOnMoment(
-  momentId: string,
-): Promise<ApiResponse<Record<string, never>>> {
-  const { data } = await api.post<ApiResponse<Record<string, never>>>(
-    `/moments/${momentId}/act`,
-  );
-  return data;
-}
-
-export async function dismissMoment(
-  momentId: string,
-): Promise<ApiResponse<Record<string, never>>> {
-  const { data } = await api.post<ApiResponse<Record<string, never>>>(
-    `/moments/${momentId}/dismiss`,
-  );
-  return data;
-}
-
-export async function postAuthSync(
-  params: { username?: string; name?: string },
-): Promise<ApiResponse<User>> {
-  // Now this relative path will correctly append to the normalized base
-  const { data } = await api.post<ApiResponse<User>>("/auth/sync", params);
-  return data;
-}
-
-// --- Micro Events ---
-
-export async function postEvent(
-  params: EventCreate,
-): Promise<ApiResponse<EventResponse>> {
-  const { data } = await api.post<ApiResponse<EventResponse>>("/events", params);
-  return data;
-}
-
-export async function getEvent(
-  eventId: string,
-): Promise<ApiResponse<EventResponse>> {
-  const { data } = await api.get<ApiResponse<EventResponse>>(`/events/${eventId}`);
-  return data;
-}
-
-export async function expressInterest(
-  eventId: string,
-): Promise<ApiResponse<EventResponse>> {
-  const { data } = await api.post<ApiResponse<EventResponse>>(`/events/${eventId}/in`);
-  return data;
-}
-
-export async function withdrawInterest(
-  eventId: string,
-): Promise<ApiResponse<EventResponse>> {
-  const { data } = await api.delete<ApiResponse<EventResponse>>(`/events/${eventId}/in`);
-  return data;
-}
-
-export async function cancelEvent(
-  eventId: string,
-): Promise<ApiResponse<EventResponse>> {
-  const { data } = await api.post<ApiResponse<EventResponse>>(`/events/${eventId}/cancel`);
-  return data;
-}
-
-export async function endEvent(
-  eventId: string,
-): Promise<ApiResponse<EventResponse>> {
-  const { data } = await api.post<ApiResponse<EventResponse>>(`/events/${eventId}/end`);
-  return data;
-}
-
-// Raw health check (hits root, not /api/v1)
+// --- Health Check ---
 export async function getHealth(): Promise<{ status: string }> {
   const { data } = await axios.get<{ status: string }>(`${API_BASE}/health`);
   return data;

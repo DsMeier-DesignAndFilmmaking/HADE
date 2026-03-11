@@ -146,7 +146,8 @@ async def decide(
             llm_result = await make_llm_decision(
                 candidate_set=candidate_set,
                 context=context,
-                provider=request.provider 
+                provider=request.provider,
+                rejection_history=request.rejection_history or None,
             )
             
             llm_used = llm_result.used_llm

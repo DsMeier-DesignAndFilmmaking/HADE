@@ -28,7 +28,7 @@
         <key>CFBundleURLSchemes</key>
         <array>
           <string>hade</string>
-          <string>com.hade.app</string>
+          <string>com.googleusercontent.apps.820290079123-etu70nt01v70fpgo4cum6i0t9fsernas</string>
         </array>
       </dict>
       <dict>
@@ -42,16 +42,28 @@
     <string>1</string>
     <key>GMSApiKey</key>
     <string>AIzaSyCq1zFRvMSJsWjwCXNN4G-A5-MFDZJs_R0</string>
+    <key>LSApplicationQueriesSchemes</key>
+    <array>
+      <string>maps</string>
+      <string>comgooglemaps</string>
+      <string>geo</string>
+    </array>
     <key>LSMinimumSystemVersion</key>
     <string>12.0</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
     <key>NSAppTransportSecurity</key>
     <dict>
-      <key>NSAllowsArbitraryLoads</key>
-      <false/>
-      <key>NSAllowsLocalNetworking</key>
-      <true/>
+      <key>NSExceptionDomains</key>
+      <dict>
+        <key>10.0.0.145</key>
+        <dict>
+          <key>NSExceptionAllowsInsecureHTTPLoads</key>
+          <true/>
+          <key>NSIncludesSubdomains</key>
+          <false/>
+        </dict>
+      </dict>
     </dict>
     <key>NSContactsUsageDescription</key>
     <string>Allow $(PRODUCT_NAME) to access your contacts</string>

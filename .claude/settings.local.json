@@ -37,7 +37,17 @@
       "Bash(xcodebuild -workspace HADE.xcworkspace -scheme HADE -sdk iphonesimulator -configuration Debug -destination 'platform=iOS Simulator,name=iPhone 16' build)",
       "Bash(xcodebuild -workspace HADE.xcworkspace -scheme HADE -sdk iphonesimulator -configuration Debug -destination 'id=CC5909A8-0325-432E-BDCA-286EEF3D55BA' build)",
       "Bash(echo \"EXIT: $?\")",
-      "Bash(echo \"Migration applied: $?\")"
+      "Bash(echo \"Migration applied: $?\")",
+      "Bash(echo \"expo-web-browser present: $?\")",
+      "Bash(test -f node_modules/expo-auth-session/build/AuthRequest.js)",
+      "Bash(test -f node_modules/expo-auth-session/build/index.js)",
+      "Bash(test -f node_modules/expo-auth-session/package.json)",
+      "Bash(npm ls expo-auth-session expo-web-browser expo-crypto)",
+      "Bash(npm ls tar)",
+      "Bash(npm view tar versions --json)",
+      "Bash(nvm use 20)",
+      "Bash(nvm use --delete-prefix v20.20.1)",
+      "Bash(echo \"EXIT:$?\")"
     ]
   }
 }

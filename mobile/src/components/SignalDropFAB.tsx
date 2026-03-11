@@ -3,69 +3,68 @@ import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import type { Opportunity } from '../types';
 
-// This interface is what TypeScript is complaining about
 interface SignalDropFABProps {
   opportunity?: Opportunity;
-  onPress: () => void; // Add this line to fix the ts(2322) error
+  onPress: () => void;
 }
 
 export default function SignalDropFAB({ opportunity, onPress }: SignalDropFABProps) {
   const handlePress = async () => {
-    // Heavy haptic to signal a "physical" drop action
     try {
+      // High-end tactile feedback for the "Drop" action
       await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     } catch (e) {
-      console.log("Haptics unavailable");
+      // Silent fail for simulator
     }
-    
-    onPress(); // Trigger the bottom sheet in MapSurface
+    onPress(); 
   };
 
   return (
     <TouchableOpacity 
-      style={styles.fab} 
+      style={styles.button} 
       onPress={handlePress}
-      activeOpacity={0.9}
+      activeOpacity={0.85}
     >
       <View style={styles.content}>
         <Text style={styles.plus}>+</Text>
-        <Text style={styles.label}>DROP SIGNAL</Text>
+        <Text style={styles.label}>DROP A VIBE</Text>
       </View>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
-  fab: {
-    position: 'absolute',
-    bottom: 40,
-    alignSelf: 'center',
-    backgroundColor: '#F59E0B', // HADE Primary Orange
-    paddingHorizontal: 24,
-    paddingVertical: 16,
-    borderRadius: 30,
-    // Modern elevation/shadow
+  button: {
+    // REMOVED: position: 'absolute', bottom, and alignSelf
+    // This allows the parent (MapSurface) to control placement perfectly.
+    backgroundColor: '#F59E0B', 
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    borderRadius: 16, // Match the slightly boxier editorial feel of the Nav Card
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    // Subtle shadow - the parent container handles the primary elevation
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 8,
-    zIndex: 100,
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 4,
   },
   content: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
   plus: {
-    color: '#0D0D0D',
-    fontSize: 20,
+    color: '#000',
+    fontSize: 18,
     fontWeight: '900',
+    marginRight: 8,
   },
   label: {
-    color: '#0D0D0D',
-    fontSize: 14,
+    color: '#000',
+    fontSize: 12,
     fontWeight: '900',
-    letterSpacing: 1,
+    letterSpacing: 1.2, // Tighter tracking for a more "pro" look
   },
 });

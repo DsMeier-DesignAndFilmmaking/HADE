@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Alert, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useSessionStore } from "../store/useSessionStore";
+import { signInAnonymously } from "../services/auth";
+import { supabase } from "../lib/supabase";
 import {
   getMapProviderOverride,
   setMapProviderOverride,
@@ -60,17 +62,31 @@ export default function DevNavOverlay() {
             </Text>
           </TouchableOpacity>
 
+          {/* Triggers the McGee Zero-Auth 3-step onboarding from any state */}
+          <TouchableOpacity
+            style={styles.btn}
+            onPress={async () => {
+              await supabase.auth.signOut();            // clear any real or anon session
+              useSessionStore.getState().setUser(null); // clear HADE user
+              await signInAnonymously();               // fresh anon session → showOnboarding=true
+            }}
+          >
+            <Text style={styles.btnText}>→ McGee Onboarding</Text>
+          </TouchableOpacity>
+
+          {/* Skip straight to DecideScreen using the same bypass as AuthScreen */}
           <TouchableOpacity
             style={styles.btn}
             onPress={() => {
-              if (!user) return;
               useSessionStore.getState().setUser({
-                ...user,
-                onboarding_complete: false,
+                id: "64c235fc-008e-401a-84c4-cc7b9b134bcf",
+                username: "daniel_meier",
+                name: "Daniel",
+                onboarding_complete: true,
               } as any);
             }}
           >
-            <Text style={styles.btnText}>Reset Onboarding</Text>
+            <Text style={styles.btnText}>→ Home (Bypass)</Text>
           </TouchableOpacity>
         </View>
       )}

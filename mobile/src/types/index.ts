@@ -83,6 +83,7 @@ export interface Opportunity {
   is_primary: boolean;
   event: EventInfo | null;
   primary_signal: PrimarySignal | null;
+  neighborhood?: string;
 }
 
 export interface DecideResponse {
@@ -143,6 +144,11 @@ export interface DecideRequest {
   group_size?: number;
   session_id?: string | null;
   provider?: "gemini" | "openai";
+  // Context-pivot parameters — sent when user recalibrates from a recommendation
+  energy_level?: string;    // "chill" → "Too much energy" pivot
+  radius_meters?: number;   // e.g. 500 → "Too far away" pivot
+  // Session-scoped rejection memory: venues the user has pivoted away from
+  rejection_history?: Array<{ venue_id: string; venue_name: string; pivot_reason: string }>;
 }
 
 export interface SignalCreate {
@@ -222,4 +228,24 @@ export interface EventResponse {
   visibility: EventVisibility;
   is_interested: boolean;
   friend_interest_hint: string | null;
+  
 }
+
+/** Authentication states for the HADE mobile app. */
+export type AuthStatus =
+  | "LOADING"
+  | "GUEST"
+  | "AUTHENTICATED"
+  | "UNAUTHENTICATED";
+
+/** Navigation stack param list — typed route params for all screens. */
+export type RootStackParamList = {
+  Home: undefined;
+  Profile: undefined;
+  RecommendationDetail: { opportunity: Opportunity; isEvent?: boolean };
+  MapSurface: { opportunity: Opportunity };
+  TrustNetwork: undefined;
+  Debug: undefined;
+  Onboarding: undefined;
+  Auth: undefined;
+};

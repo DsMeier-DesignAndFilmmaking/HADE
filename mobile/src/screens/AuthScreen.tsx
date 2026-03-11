@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Animated,
@@ -16,6 +16,7 @@ import {
   emailSignIn,
   emailSignUp,
   sendOtp,
+  signInWithGoogle,
   updateUserMetadata,
   verifyOtp,
 } from "../services/auth";
@@ -24,15 +25,63 @@ import { useSessionStore } from "../store/useSessionStore";
 import { supabase } from "../lib/supabase";
 import type { User } from "../types";
 
-// ─── Types ───────────────────────────────────────────────────
+// ─── Design tokens ────────────────────────────────────────────
+// "Modern McGee" — warm cream, layered surfaces, amber accent.
+const C = {
+  bg:          "#F7F4F0",   // warm cream background
+  surface:     "#FFFFFF",   // white card / input surface
+  surfaceAlt:  "#F0EDE8",   // slightly darker cream (secondary surfaces)
+  border:      "#E7E4DF",   // warm light gray border
+  borderStrong:"#D6D3D1",   // stronger border (focused inputs, dividers)
+  text:        "#1C1917",   // warm near-black (primary text)
+  textMuted:   "#78716C",   // warm gray (secondary text)
+  textFaint:   "#A8A29E",   // placeholder / caption
+  accent:      "#F59E0B",   // HADE amber CTA
+  accentText:  "#000000",   // text on amber buttons
+  link:        "#3B82F6",   // blue links
+  error:       "#DC2626",   // error text
+  errorBg:     "#FEF2F2",   // error toast background
+  errorBorder: "#FECACA",   // error toast border
+  infoBg:      "#FFFBEB",   // info toast background (amber-tinted)
+  infoBorder:  "#FDE68A",   // info toast border
+  infoText:    "#92400E",   // info toast text
+} as const;
+
+// ─── Error message mapping ────────────────────────────────────
+// Translates cryptic Supabase / Google OAuth errors into copy
+// a non-technical user can act on. Returns "" for silent cases.
+const AUTH_ERROR_MAP: Array<[string, string]> = [
+  ["redirect uri not allowed",   "Config error: add hade://auth/callback to Supabase Redirect URLs."],
+  ["redirect_uri_not_allowed",   "Config error: add hade://auth/callback to Supabase Redirect URLs."],
+  ["redirect_uri_mismatch",      "Config error: add the Supabase callback URL to Google Cloud Console."],
+  ["invalid request",            "Sign-in request was invalid — please try again."],
+  ["access_denied",              "Access denied — please try signing in again."],
+  ["email not confirmed",        "Check your email and confirm your account first."],
+  ["invalid login credentials",  "Email or password is incorrect."],
+  ["user already registered",    "An account with this email already exists. Sign in instead."],
+  ["google sign-in was cancelled", ""],  // silent — user dismissed intentionally
+];
+
+function mapAuthError(raw: string): string {
+  const lower = raw.toLowerCase();
+  for (const [key, friendly] of AUTH_ERROR_MAP) {
+    if (lower.includes(key)) return friendly;
+  }
+  return raw; // pass unknown errors through unchanged
+}
+
+// ─── Types ────────────────────────────────────────────────────
 type AuthMode = "welcome" | "create" | "signin";
 type CreateStep = "form" | "done";
 type SignInMethod = "phone" | "email";
 type SignInStep = "credentials" | "otp";
+type ToastType = "error" | "info";
 
 interface AuthScreenProps {
   onBypass: () => void;
 }
+
+// ─── Pure helpers (no component state) ───────────────────────
 
 /**
  * Build a local User from Supabase auth metadata.
@@ -48,7 +97,9 @@ function buildLocalUser(supaUser: {
   return {
     id: supaUser.id,
     username: meta.username ?? null,
-    name: meta.display_name ?? meta.username ?? "User",
+    // Supabase populates Google OAuth metadata as full_name / name.
+    // display_name is never set by Google — checking it last prevents silent "User" fallback.
+    name: meta.full_name ?? meta.name ?? meta.display_name ?? meta.username ?? "User",
     email: supaUser.email ?? null,
     home_city: "",
     onboarding_complete: false,
@@ -82,7 +133,6 @@ async function syncOrFallback(
     } = await supabase.auth.getUser();
     if (supaUser) {
       const localUser = buildLocalUser(supaUser);
-      // Merge in any params we tried to sync
       if (syncParams.username) localUser.username = syncParams.username;
       if (syncParams.name) localUser.name = syncParams.name;
       useSessionStore.getState().setUser(localUser);
@@ -103,6 +153,7 @@ export default function AuthScreen({
 }: AuthScreenProps): React.JSX.Element {
   const isAuthenticated = useSessionStore((s) => s.isAuthenticated);
   const user = useSessionStore((s) => s.user);
+  const setAuthLoading = useSessionStore((s) => s.setAuthLoading);
 
   const [mode, setMode] = useState<AuthMode>("welcome");
 
@@ -123,16 +174,47 @@ export default function AuthScreen({
 
   // — Shared —
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const otpInputRef = useRef<TextInput>(null);
 
-  // Fade-in
+  // ─── Toast system ─────────────────────────────────────────
+  const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
+  const toastY = useRef(new Animated.Value(-120)).current;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const dismissToast = useCallback(() => {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    Animated.timing(toastY, {
+      toValue: -120,
+      duration: 250,
+      useNativeDriver: true,
+    }).start(() => setToast(null));
+  }, [toastY]);
+
+  const showToast = useCallback(
+    (raw: string, type: ToastType = "error") => {
+      const message = mapAuthError(raw);
+      if (!message) return; // empty = intentionally silent
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      setToast({ message, type });
+      toastY.setValue(-120);
+      Animated.spring(toastY, {
+        toValue: 0,
+        tension: 80,
+        friction: 10,
+        useNativeDriver: true,
+      }).start();
+      toastTimer.current = setTimeout(dismissToast, 5000);
+    },
+    [toastY, dismissToast],
+  );
+
+  // ─── Animations ───────────────────────────────────────────
   const fadeAnim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.timing(fadeAnim, {
       toValue: 1,
-      duration: 400,
+      duration: 350,
       useNativeDriver: true,
     }).start();
   }, [fadeAnim]);
@@ -144,14 +226,14 @@ export default function AuthScreen({
     }
   }, [signInStep]);
 
-  // After email sign-in, auto-resolve user
+  // Auto-resolve user after any auth state change (Google, email, phone)
   useEffect(() => {
-    if (isAuthenticated && !user && mode === "signin" && signInMethod === "email") {
+    if (isAuthenticated && !user) {
       syncOrFallback({}).finally(() => setLoading(false));
     }
-  }, [isAuthenticated, user, mode, signInMethod]);
+  }, [isAuthenticated, user]);
 
-  // ─── Validation ─────────────────────────────────────────────
+  // ─── Validation ───────────────────────────────────────────
   const isEmailValid = (v: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
   const isPhoneValid = phone.replace(/\D/g, "").length >= 10;
 
@@ -161,15 +243,13 @@ export default function AuthScreen({
     isEmailValid(createEmail) &&
     createPassword.length >= 6;
 
-  // ─── Create Account ─────────────────────────────────────────
+  // ─── Create Account ───────────────────────────────────────
   const handleCreateAccount = async (): Promise<void> => {
     setLoading(true);
-    setError(null);
     const name = createName.trim();
     const uname = createUsername.trim().toLowerCase();
 
     try {
-      // Create Supabase user with email+password + metadata in one call
       const { needsConfirmation } = await emailSignUp(
         createEmail.trim(),
         createPassword,
@@ -177,38 +257,27 @@ export default function AuthScreen({
       );
 
       if (needsConfirmation) {
-        // Email confirmation is enabled in Supabase Dashboard.
-        // Tell user to check email, then sign in afterward.
-        setError(
-          "Account created. Check your email to confirm, then sign in.",
-        );
+        showToast("Account created. Check your email to confirm, then sign in.", "info");
         setLoading(false);
         return;
       }
 
-      // Session returned immediately — sync to backend (or fallback)
       await syncOrFallback({ username: uname, name });
     } catch (err: any) {
-      const msg = err.message ?? "Something went wrong";
-      if (msg.toLowerCase().includes("already registered")) {
-        setError("An account with this email already exists. Try signing in.");
-      } else {
-        setError(msg);
-      }
+      showToast(err.message ?? "Something went wrong");
     } finally {
       setLoading(false);
     }
   };
 
-  // ─── Sign In: Phone OTP ─────────────────────────────────────
+  // ─── Sign In: Phone OTP ───────────────────────────────────
   const handleSendOtp = async (): Promise<void> => {
     setLoading(true);
-    setError(null);
     try {
       await sendOtp(phone);
       setSignInStep("otp");
     } catch (err: any) {
-      setError(err.message ?? "Failed to send code");
+      showToast(err.message ?? "Failed to send code");
     } finally {
       setLoading(false);
     }
@@ -217,13 +286,11 @@ export default function AuthScreen({
   const handleVerifyOtp = async (): Promise<void> => {
     if (otp.length < 6) return;
     setLoading(true);
-    setError(null);
     try {
       await verifyOtp(phone, otp);
-      // After verify, isAuthenticated flips → try sync
       await syncOrFallback({});
     } catch (err: any) {
-      setError(err.message ?? "Invalid code");
+      showToast(err.message ?? "Invalid code");
     } finally {
       setLoading(false);
     }
@@ -231,32 +298,46 @@ export default function AuthScreen({
 
   const handleResendOtp = async (): Promise<void> => {
     setLoading(true);
-    setError(null);
     try {
       await sendOtp(phone);
     } catch (err: any) {
-      setError(err.message ?? "Failed to resend");
+      showToast(err.message ?? "Failed to resend");
     } finally {
       setLoading(false);
     }
   };
 
-  // ─── Sign In: Email ─────────────────────────────────────────
+  // ─── Sign In: Email ───────────────────────────────────────
   const handleEmailSignIn = async (): Promise<void> => {
     setLoading(true);
-    setError(null);
     try {
       await emailSignIn(signInEmail.trim(), signInPassword);
-      // useEffect will handle sync after isAuthenticated flips
+      // useEffect handles sync after isAuthenticated flips
     } catch (err: any) {
-      setError(err.message ?? "Invalid email or password");
+      showToast(err.message ?? "Invalid email or password");
       setLoading(false);
     }
   };
 
-  // ─── Navigation ─────────────────────────────────────────────
+  // ─── Google SSO ───────────────────────────────────────────
+  const handleGoogleSignIn = async (): Promise<void> => {
+    setLoading(true);
+    setAuthLoading(true);
+    try {
+      await signInWithGoogle();
+      await syncOrFallback({});
+    } catch (err: any) {
+      // mapAuthError returns "" for "Google sign-in was cancelled" → silent
+      showToast(err.message ?? "Google sign-in failed");
+    } finally {
+      setLoading(false);
+      setAuthLoading(false);
+    }
+  };
+
+  // ─── Navigation ───────────────────────────────────────────
   const goBack = () => {
-    setError(null);
+    dismissToast();
     if (mode === "signin" && signInStep === "otp") {
       setSignInStep("credentials");
       setOtp("");
@@ -267,46 +348,100 @@ export default function AuthScreen({
     }
   };
 
+  // ─── Toast JSX ────────────────────────────────────────────
+  const toastJSX = toast ? (
+    <Animated.View
+      style={[
+        styles.toast,
+        toast.type === "error" ? styles.toastError : styles.toastInfo,
+        { transform: [{ translateY: toastY }] },
+      ]}
+    >
+      <Text style={[styles.toastIcon, toast.type === "error" ? styles.toastIconError : styles.toastIconInfo]}>
+        {toast.type === "error" ? "⚠" : "ℹ"}
+      </Text>
+      <Text
+        style={[styles.toastText, toast.type === "error" ? styles.toastTextError : styles.toastTextInfo]}
+        numberOfLines={3}
+      >
+        {toast.message}
+      </Text>
+      <Pressable onPress={dismissToast} hitSlop={12}>
+        <Text style={[styles.toastDismiss, toast.type === "error" ? styles.toastTextError : styles.toastTextInfo]}>
+          ✕
+        </Text>
+      </Pressable>
+    </Animated.View>
+  ) : null;
+
   // ═══════════════════════════════════════════════════════════
   // RENDER: WELCOME
   // ═══════════════════════════════════════════════════════════
   if (mode === "welcome") {
     return (
       <SafeAreaView style={styles.container}>
+        {toastJSX}
         <Animated.View style={[styles.welcomeContent, { opacity: fadeAnim }]}>
-          <View>
+
+          {/* ── Brand mark ── */}
+          <View style={styles.brandBlock}>
             <Text style={styles.welcomeLogo}>HADE</Text>
             <Text style={styles.welcomeTagline}>
               The city is on your side tonight.
             </Text>
           </View>
 
+          {/* ── Divider ── */}
+          <View style={styles.divider} />
+
+          {/* ── Actions ── */}
           <View style={styles.welcomeActions}>
+
+            {/* Google — primary path */}
+            <Pressable
+              style={[styles.googleButton, loading && styles.buttonDisabled]}
+              onPress={handleGoogleSignIn}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator color={C.textMuted} />
+              ) : (
+                <>
+                  <Text style={styles.googleG}>G</Text>
+                  <Text style={styles.googleButtonText}>Continue with Google</Text>
+                </>
+              )}
+            </Pressable>
+
+            {/* OR separator */}
+            <View style={styles.orRow}>
+              <View style={styles.orLine} />
+              <Text style={styles.orText}>or</Text>
+              <View style={styles.orLine} />
+            </View>
+
+            {/* Create account — amber CTA */}
             <Pressable
               style={styles.primaryButton}
-              onPress={() => {
-                setMode("create");
-                setError(null);
-              }}
+              onPress={() => { dismissToast(); setMode("create"); }}
             >
               <Text style={styles.primaryButtonText}>Create Account</Text>
             </Pressable>
 
+            {/* Sign in — text link only */}
             <Pressable
-              style={styles.secondaryButton}
-              onPress={() => {
-                setMode("signin");
-                setError(null);
-              }}
+              style={styles.signInLink}
+              onPress={() => { dismissToast(); setMode("signin"); }}
             >
-              <Text style={styles.secondaryButtonText}>
-                I already have an account
-              </Text>
+              <Text style={styles.signInLinkText}>Already have an account? <Text style={styles.signInLinkAccent}>Sign in</Text></Text>
             </Pressable>
 
-            <Pressable style={styles.bypassButton} onPress={onBypass}>
-              <Text style={styles.bypassText}>Developer Bypass</Text>
-            </Pressable>
+            {/* Dev bypass */}
+            {__DEV__ && (
+              <Pressable style={styles.bypassButton} onPress={onBypass}>
+                <Text style={styles.bypassText}>Developer Bypass</Text>
+              </Pressable>
+            )}
           </View>
         </Animated.View>
       </SafeAreaView>
@@ -319,13 +454,15 @@ export default function AuthScreen({
   if (mode === "create") {
     return (
       <SafeAreaView style={styles.container}>
+        {toastJSX}
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : "height"}
           style={styles.flex}
         >
           <View style={styles.header}>
-            <Pressable onPress={goBack} hitSlop={12}>
-              <Text style={styles.backArrow}>‹</Text>
+            <Pressable onPress={goBack} hitSlop={12} style={styles.backBtn}>
+              <Text style={styles.backArrow}>←</Text>
+              <Text style={styles.backLabel}>Back</Text>
             </Pressable>
             <Text style={styles.headerTitle}>Create your account</Text>
             <Text style={styles.headerSubtitle}>
@@ -338,76 +475,78 @@ export default function AuthScreen({
             keyboardShouldPersistTaps="handled"
           >
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Display name</Text>
-              <TextInput
-                style={styles.input}
-                value={createName}
-                onChangeText={setCreateName}
-                placeholder="How friends see you"
-                placeholderTextColor="#57534E"
-                autoCapitalize="words"
-                textContentType="name"
-                autoFocus
-              />
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>Display name</Text>
+                <TextInput
+                  style={styles.input}
+                  value={createName}
+                  onChangeText={setCreateName}
+                  placeholder="How friends see you"
+                  placeholderTextColor={C.textFaint}
+                  autoCapitalize="words"
+                  textContentType="name"
+                  autoFocus
+                />
+              </View>
 
-              <Text style={styles.inputLabel}>Username</Text>
-              <TextInput
-                style={styles.input}
-                value={createUsername}
-                onChangeText={(t) =>
-                  setCreateUsername(t.toLowerCase().replace(/[^a-z0-9_]/g, ""))
-                }
-                placeholder="unique_handle"
-                placeholderTextColor="#57534E"
-                autoCapitalize="none"
-                autoCorrect={false}
-                textContentType="username"
-              />
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>Username</Text>
+                <TextInput
+                  style={styles.input}
+                  value={createUsername}
+                  onChangeText={(t) =>
+                    setCreateUsername(t.toLowerCase().replace(/[^a-z0-9_]/g, ""))
+                  }
+                  placeholder="unique_handle"
+                  placeholderTextColor={C.textFaint}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  textContentType="username"
+                />
+              </View>
 
-              <Text style={styles.inputLabel}>Email</Text>
-              <TextInput
-                style={styles.input}
-                value={createEmail}
-                onChangeText={setCreateEmail}
-                placeholder="you@email.com"
-                placeholderTextColor="#57534E"
-                autoCapitalize="none"
-                keyboardType="email-address"
-                textContentType="emailAddress"
-              />
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>Email</Text>
+                <TextInput
+                  style={styles.input}
+                  value={createEmail}
+                  onChangeText={setCreateEmail}
+                  placeholder="you@email.com"
+                  placeholderTextColor={C.textFaint}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  textContentType="emailAddress"
+                />
+              </View>
 
-              <Text style={styles.inputLabel}>Password</Text>
-              <TextInput
-                style={styles.input}
-                value={createPassword}
-                onChangeText={setCreatePassword}
-                placeholder="Min 6 characters"
-                placeholderTextColor="#57534E"
-                secureTextEntry
-                textContentType="newPassword"
-              />
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={createPassword}
+                  onChangeText={setCreatePassword}
+                  placeholder="Min 6 characters"
+                  placeholderTextColor={C.textFaint}
+                  secureTextEntry
+                  textContentType="newPassword"
+                />
+              </View>
 
               <Pressable
                 style={[
-                  styles.actionButton,
-                  (loading || !canCreateAccount) && styles.actionButtonDisabled,
+                  styles.primaryButton,
+                  (loading || !canCreateAccount) && styles.buttonDisabled,
                 ]}
                 onPress={handleCreateAccount}
                 disabled={loading || !canCreateAccount}
               >
                 {loading ? (
-                  <ActivityIndicator color="#000000" />
+                  <ActivityIndicator color={C.accentText} />
                 ) : (
-                  <Text style={styles.actionButtonText}>Create Account</Text>
+                  <Text style={styles.primaryButtonText}>Create Account</Text>
                 )}
               </Pressable>
             </View>
-
-            {error && (
-              <View style={styles.errorBox}>
-                <Text style={styles.errorText}>{error}</Text>
-              </View>
-            )}
           </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
@@ -428,13 +567,15 @@ export default function AuthScreen({
 
   return (
     <SafeAreaView style={styles.container}>
+      {toastJSX}
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.flex}
       >
         <View style={styles.header}>
-          <Pressable onPress={goBack} hitSlop={12}>
-            <Text style={styles.backArrow}>‹</Text>
+          <Pressable onPress={goBack} hitSlop={12} style={styles.backBtn}>
+            <Text style={styles.backArrow}>←</Text>
+            <Text style={styles.backLabel}>Back</Text>
           </Pressable>
           <Text style={styles.headerTitle}>{signInTitle}</Text>
           <Text style={styles.headerSubtitle}>{signInSubtitle}</Text>
@@ -443,40 +584,18 @@ export default function AuthScreen({
           {signInStep === "credentials" && (
             <View style={styles.tabs}>
               <Pressable
-                style={[
-                  styles.tab,
-                  signInMethod === "phone" && styles.tabActive,
-                ]}
-                onPress={() => {
-                  setSignInMethod("phone");
-                  setError(null);
-                }}
+                style={[styles.tab, signInMethod === "phone" && styles.tabActive]}
+                onPress={() => { setSignInMethod("phone"); dismissToast(); }}
               >
-                <Text
-                  style={[
-                    styles.tabText,
-                    signInMethod === "phone" && styles.tabTextActive,
-                  ]}
-                >
+                <Text style={[styles.tabText, signInMethod === "phone" && styles.tabTextActive]}>
                   Phone
                 </Text>
               </Pressable>
               <Pressable
-                style={[
-                  styles.tab,
-                  signInMethod === "email" && styles.tabActive,
-                ]}
-                onPress={() => {
-                  setSignInMethod("email");
-                  setError(null);
-                }}
+                style={[styles.tab, signInMethod === "email" && styles.tabActive]}
+                onPress={() => { setSignInMethod("email"); dismissToast(); }}
               >
-                <Text
-                  style={[
-                    styles.tabText,
-                    signInMethod === "email" && styles.tabTextActive,
-                  ]}
-                >
+                <Text style={[styles.tabText, signInMethod === "email" && styles.tabTextActive]}>
                   Email
                 </Text>
               </Pressable>
@@ -488,129 +607,129 @@ export default function AuthScreen({
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
-          {/* ─── PHONE CREDENTIALS ─────────────────────── */}
+          {/* ─── PHONE CREDENTIALS ─── */}
           {signInStep === "credentials" && signInMethod === "phone" && (
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Phone number</Text>
-              <TextInput
-                style={styles.input}
-                value={phone}
-                onChangeText={setPhone}
-                placeholder="+1 555 123 4567"
-                placeholderTextColor="#57534E"
-                keyboardType="phone-pad"
-                textContentType="telephoneNumber"
-                autoFocus
-              />
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>Phone number</Text>
+                <TextInput
+                  style={styles.input}
+                  value={phone}
+                  onChangeText={setPhone}
+                  placeholder="+1 555 123 4567"
+                  placeholderTextColor={C.textFaint}
+                  keyboardType="phone-pad"
+                  textContentType="telephoneNumber"
+                  autoFocus
+                />
+              </View>
               <Pressable
                 style={[
-                  styles.actionButton,
-                  (loading || !isPhoneValid) && styles.actionButtonDisabled,
+                  styles.primaryButton,
+                  (loading || !isPhoneValid) && styles.buttonDisabled,
                 ]}
                 onPress={handleSendOtp}
                 disabled={loading || !isPhoneValid}
               >
                 {loading ? (
-                  <ActivityIndicator color="#000000" />
+                  <ActivityIndicator color={C.accentText} />
                 ) : (
-                  <Text style={styles.actionButtonText}>Send Code</Text>
+                  <Text style={styles.primaryButtonText}>Send Code</Text>
                 )}
               </Pressable>
             </View>
           )}
 
-          {/* ─── EMAIL CREDENTIALS ─────────────────────── */}
+          {/* ─── EMAIL CREDENTIALS ─── */}
           {signInStep === "credentials" && signInMethod === "email" && (
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Email</Text>
-              <TextInput
-                style={styles.input}
-                value={signInEmail}
-                onChangeText={setSignInEmail}
-                placeholder="you@email.com"
-                placeholderTextColor="#57534E"
-                autoCapitalize="none"
-                keyboardType="email-address"
-                textContentType="emailAddress"
-                autoFocus
-              />
-              <Text style={styles.inputLabel}>Password</Text>
-              <TextInput
-                style={styles.input}
-                value={signInPassword}
-                onChangeText={setSignInPassword}
-                placeholder="Your password"
-                placeholderTextColor="#57534E"
-                secureTextEntry
-                textContentType="password"
-              />
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>Email</Text>
+                <TextInput
+                  style={styles.input}
+                  value={signInEmail}
+                  onChangeText={setSignInEmail}
+                  placeholder="you@email.com"
+                  placeholderTextColor={C.textFaint}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  textContentType="emailAddress"
+                  autoFocus
+                />
+              </View>
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>Password</Text>
+                <TextInput
+                  style={styles.input}
+                  value={signInPassword}
+                  onChangeText={setSignInPassword}
+                  placeholder="Your password"
+                  placeholderTextColor={C.textFaint}
+                  secureTextEntry
+                  textContentType="password"
+                />
+              </View>
               <Pressable
                 style={[
-                  styles.actionButton,
-                  (loading ||
-                    !isEmailValid(signInEmail) ||
-                    signInPassword.length < 6) &&
-                    styles.actionButtonDisabled,
+                  styles.primaryButton,
+                  (loading || !isEmailValid(signInEmail) || signInPassword.length < 6) &&
+                    styles.buttonDisabled,
                 ]}
                 onPress={handleEmailSignIn}
-                disabled={
-                  loading ||
-                  !isEmailValid(signInEmail) ||
-                  signInPassword.length < 6
-                }
+                disabled={loading || !isEmailValid(signInEmail) || signInPassword.length < 6}
               >
                 {loading ? (
-                  <ActivityIndicator color="#000000" />
+                  <ActivityIndicator color={C.accentText} />
                 ) : (
-                  <Text style={styles.actionButtonText}>Sign In</Text>
+                  <Text style={styles.primaryButtonText}>Sign In</Text>
                 )}
               </Pressable>
             </View>
           )}
 
-          {/* ─── OTP VERIFICATION ──────────────────────── */}
+          {/* ─── OTP VERIFICATION ─── */}
           {signInStep === "otp" && (
             <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>6-digit code</Text>
-              <TextInput
-                ref={otpInputRef}
-                style={[styles.input, styles.otpInput]}
-                value={otp}
-                onChangeText={(text) => {
-                  const digits = text.replace(/\D/g, "").slice(0, 6);
-                  setOtp(digits);
-                  if (digits.length === 6) {
-                    setTimeout(() => handleVerifyOtp(), 200);
-                  }
-                }}
-                placeholder="000000"
-                placeholderTextColor="#57534E"
-                keyboardType="number-pad"
-                textContentType="oneTimeCode"
-                maxLength={6}
-                autoFocus
-              />
+              <View style={styles.inputBlock}>
+                <Text style={styles.inputLabel}>6-digit code</Text>
+                <TextInput
+                  ref={otpInputRef}
+                  style={[styles.input, styles.otpInput]}
+                  value={otp}
+                  onChangeText={(text) => {
+                    const digits = text.replace(/\D/g, "").slice(0, 6);
+                    setOtp(digits);
+                    if (digits.length === 6) {
+                      setTimeout(() => handleVerifyOtp(), 200);
+                    }
+                  }}
+                  placeholder="000000"
+                  placeholderTextColor={C.textFaint}
+                  keyboardType="number-pad"
+                  textContentType="oneTimeCode"
+                  maxLength={6}
+                  autoFocus
+                />
+              </View>
 
               <Pressable
                 style={[
-                  styles.actionButton,
-                  (loading || otp.length < 6) && styles.actionButtonDisabled,
+                  styles.primaryButton,
+                  (loading || otp.length < 6) && styles.buttonDisabled,
                 ]}
                 onPress={handleVerifyOtp}
                 disabled={loading || otp.length < 6}
               >
                 {loading ? (
-                  <ActivityIndicator color="#000000" />
+                  <ActivityIndicator color={C.accentText} />
                 ) : (
-                  <Text style={styles.actionButtonText}>Verify</Text>
+                  <Text style={styles.primaryButtonText}>Verify</Text>
                 )}
               </Pressable>
 
               <View style={styles.otpLinks}>
                 <Pressable onPress={handleResendOtp} disabled={loading}>
-                  <Text
-                    style={[styles.linkText, loading && styles.linkDisabled]}
-                  >
+                  <Text style={[styles.linkText, loading && styles.linkDisabled]}>
                     Resend code
                   </Text>
                 </Pressable>
@@ -624,135 +743,235 @@ export default function AuthScreen({
               )}
             </View>
           )}
-
-          {/* ─── ERROR ─────────────────────────────────── */}
-          {error && (
-            <View style={styles.errorBox}>
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
-// ─── Styles ──────────────────────────────────────────────────
+// ─── Styles ───────────────────────────────────────────────────
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#000000" },
+  container: { flex: 1, backgroundColor: C.bg },
   flex: { flex: 1 },
 
-  /* ── Welcome ─────────────────────────────────── */
+  /* ── Toast ─────────────────────────────────────── */
+  toast: {
+    position: "absolute",
+    top: 0,
+    left: 16,
+    right: 16,
+    zIndex: 100,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    // Shadow
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  toastError: {
+    backgroundColor: C.errorBg,
+    borderColor: C.errorBorder,
+  },
+  toastInfo: {
+    backgroundColor: C.infoBg,
+    borderColor: C.infoBorder,
+  },
+  toastIcon: { fontSize: 16 },
+  toastIconError: { color: C.error },
+  toastIconInfo: { color: C.infoText },
+  toastText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  toastTextError: { color: C.error },
+  toastTextInfo: { color: C.infoText },
+  toastDismiss: { fontSize: 14, fontWeight: "700", opacity: 0.6 },
+
+  /* ── Welcome ────────────────────────────────────── */
   welcomeContent: {
     flex: 1,
-    justifyContent: "space-between",
-    paddingHorizontal: 32,
-    paddingTop: 80,
+    paddingHorizontal: 28,
+    paddingTop: 72,
     paddingBottom: 48,
   },
+  brandBlock: {
+    flex: 1,
+    justifyContent: "center",
+  },
   welcomeLogo: {
-    color: "#F59E0B",
-    fontSize: 48,
+    color: C.text,
+    fontSize: 52,
     fontWeight: "900",
     letterSpacing: -2,
   },
   welcomeTagline: {
-    color: "#78716C",
-    fontSize: 20,
-    lineHeight: 28,
-    marginTop: 12,
+    color: C.textMuted,
+    fontSize: 18,
+    lineHeight: 26,
+    marginTop: 10,
     fontStyle: "italic",
   },
-  welcomeActions: { gap: 14 },
-  primaryButton: {
-    backgroundColor: "#F59E0B",
-    borderRadius: 14,
-    paddingVertical: 18,
-    alignItems: "center",
-    minHeight: 56,
-    justifyContent: "center",
+  divider: {
+    height: 1,
+    backgroundColor: C.border,
+    marginBottom: 32,
   },
-  primaryButtonText: { color: "#000000", fontSize: 17, fontWeight: "800" },
-  secondaryButton: {
+  welcomeActions: { gap: 12 },
+
+  // Google button — white surface card
+  googleButton: {
+    backgroundColor: C.surface,
     borderWidth: 1,
-    borderColor: "#1A1A1A",
-    borderRadius: 14,
-    paddingVertical: 18,
+    borderColor: C.border,
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+    minHeight: 56,
+    // Elevation
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  googleG: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: "#4285F4",
+    letterSpacing: -0.5,
+  },
+  googleButtonText: {
+    color: C.text,
+    fontSize: 16,
+    fontWeight: "600",
+  },
+
+  // OR separator
+  orRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginVertical: 4,
+  },
+  orLine: { flex: 1, height: 1, backgroundColor: C.border },
+  orText: {
+    color: C.textFaint,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+  },
+
+  // Primary CTA — amber
+  primaryButton: {
+    backgroundColor: C.accent,
+    borderRadius: 16,
+    paddingVertical: 17,
     alignItems: "center",
     minHeight: 56,
     justifyContent: "center",
   },
-  secondaryButtonText: { color: "#FAFAF8", fontSize: 16, fontWeight: "600" },
+  primaryButtonText: {
+    color: C.accentText,
+    fontSize: 16,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+
+  // Sign-in text link
+  signInLink: { alignItems: "center", paddingVertical: 8 },
+  signInLinkText: { color: C.textMuted, fontSize: 14 },
+  signInLinkAccent: { color: C.accent, fontWeight: "700" },
+
+  // Dev bypass
   bypassButton: {
-    paddingVertical: 14,
+    paddingVertical: 16,
     alignItems: "center",
-    marginTop: 24,
+    marginTop: 16,
     borderTopWidth: 1,
-    borderTopColor: "#0D0D0D",
+    borderTopColor: C.border,
   },
   bypassText: {
-    color: "#57534E",
+    color: C.textFaint,
+    fontSize: 11,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    letterSpacing: 1.2,
+  },
+
+  // Shared disabled state
+  buttonDisabled: { opacity: 0.38 },
+
+  /* ── Header (form screens) ─────────────────────── */
+  header: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 8 },
+  backBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 20,
+  },
+  backArrow: { color: C.textMuted, fontSize: 18 },
+  backLabel: { color: C.textMuted, fontSize: 14, fontWeight: "500" },
+  headerTitle: {
+    color: C.text,
+    fontSize: 26,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  headerSubtitle: { color: C.textMuted, fontSize: 14, marginTop: 4 },
+
+  /* ── Tabs ───────────────────────────────────────── */
+  tabs: {
+    flexDirection: "row",
+    backgroundColor: C.surfaceAlt,
+    borderRadius: 12,
+    padding: 4,
+    marginTop: 20,
+    borderWidth: 1,
+    borderColor: C.border,
+  },
+  tab: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 9,
+    alignItems: "center",
+  },
+  tabActive: { backgroundColor: C.accent },
+  tabText: { color: C.textMuted, fontSize: 14, fontWeight: "700" },
+  tabTextActive: { color: C.accentText },
+
+  /* ── Content ────────────────────────────────────── */
+  scrollContent: { padding: 24, paddingBottom: 60 },
+  inputGroup: { gap: 16 },
+  inputBlock: { gap: 6 },
+  inputLabel: {
+    color: C.textMuted,
     fontSize: 11,
     fontWeight: "700",
     textTransform: "uppercase",
     letterSpacing: 1,
   },
-
-  /* ── Header ──────────────────────────────────── */
-  header: { paddingHorizontal: 24, paddingTop: 16, paddingBottom: 12 },
-  backArrow: {
-    color: "#FAFAF8",
-    fontSize: 36,
-    fontWeight: "300",
-    lineHeight: 36,
-    marginBottom: 16,
-  },
-  headerTitle: {
-    color: "#FAFAF8",
-    fontSize: 28,
-    fontWeight: "800",
-    letterSpacing: -0.5,
-  },
-  headerSubtitle: { color: "#78716C", fontSize: 15, marginTop: 4 },
-
-  /* ── Tabs ────────────────────────────────────── */
-  tabs: {
-    flexDirection: "row",
-    backgroundColor: "#0D0D0D",
-    borderRadius: 12,
-    padding: 4,
-    marginTop: 20,
-    borderWidth: 1,
-    borderColor: "#1A1A1A",
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 10,
-    alignItems: "center",
-  },
-  tabActive: { backgroundColor: "#F59E0B" },
-  tabText: { color: "#57534E", fontSize: 14, fontWeight: "700" },
-  tabTextActive: { color: "#000000" },
-
-  /* ── Content ─────────────────────────────────── */
-  scrollContent: { padding: 24, paddingBottom: 60 },
-  inputGroup: { gap: 20 },
-  inputLabel: {
-    color: "#78716C",
-    fontSize: 12,
-    fontWeight: "800",
-    textTransform: "uppercase",
-    letterSpacing: 1.2,
-  },
   input: {
-    backgroundColor: "#0D0D0D",
+    backgroundColor: C.surface,
     borderWidth: 1,
-    borderColor: "#1A1A1A",
+    borderColor: C.border,
     borderRadius: 12,
-    padding: 18,
-    color: "#FAFAF8",
+    padding: 16,
+    color: C.text,
     fontSize: 16,
+    // Subtle card elevation
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 4,
+    elevation: 1,
   },
   otpInput: {
     fontSize: 28,
@@ -762,35 +981,20 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
 
-  /* ── Action Button ───────────────────────────── */
-  actionButton: {
-    backgroundColor: "#F59E0B",
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: "center",
-    minHeight: 52,
-    justifyContent: "center",
+  /* ── Links ──────────────────────────────────────── */
+  linkText: { color: C.link, fontSize: 14 },
+  linkDisabled: { opacity: 0.4 },
+  otpLinks: {
+    flexDirection: "row",
+    justifyContent: "space-between",
     marginTop: 4,
   },
-  actionButtonDisabled: { opacity: 0.35 },
-  actionButtonText: { color: "#000000", fontSize: 16, fontWeight: "800" },
 
-  /* ── Links ───────────────────────────────────── */
-  linkText: { color: "#3B82F6", fontSize: 14 },
-  linkDisabled: { opacity: 0.4 },
-  otpLinks: { flexDirection: "row", justifyContent: "space-between" },
-
-  /* ── Error ───────────────────────────────────── */
-  errorBox: {
-    backgroundColor: "#0D0D0D",
-    borderWidth: 1,
-    borderColor: "rgba(239, 68, 68, 0.2)",
-    borderRadius: 12,
-    padding: 16,
-    marginTop: 20,
+  /* ── Dev ────────────────────────────────────────── */
+  devHint: {
+    color: C.textFaint,
+    fontSize: 12,
+    textAlign: "center",
+    marginTop: 8,
   },
-  errorText: { color: "#EF4444", fontSize: 14, textAlign: "center" },
-
-  /* ── Dev ─────────────────────────────────────── */
-  devHint: { color: "#57534E", fontSize: 12, textAlign: "center", marginTop: 8 },
 });

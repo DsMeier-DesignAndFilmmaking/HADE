@@ -23,6 +23,10 @@ interface SessionState {
   setSession: (session: Session | null) => void;
   clearAuth: () => void;
   initialize: () => () => void;
+  // Global OAuth handshake flag — prevents navigation flicker while the
+  // Google sign-in sheet is open and the code exchange is in-flight.
+  authLoading: boolean;
+  setAuthLoading: (loading: boolean) => void;
 
   // User actions
   setUser: (user: User | null) => void;
@@ -51,6 +55,8 @@ export const useSessionStore = create<SessionState>((set) => ({
   groupSize: 1,
 
   // Auth actions
+  authLoading: false,
+  setAuthLoading: (authLoading) => set({ authLoading }),
   setSession: (session) =>
     set({ supabaseSession: session, isAuthenticated: session !== null }),
   clearAuth: () =>
@@ -58,6 +64,7 @@ export const useSessionStore = create<SessionState>((set) => ({
       supabaseSession: null,
       isAuthenticated: false,
       user: null,
+      authLoading: false,
     }),
 
   initialize: () => {

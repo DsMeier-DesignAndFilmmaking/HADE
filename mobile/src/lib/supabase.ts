@@ -8,9 +8,16 @@ const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
 export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   auth: {
+    // AsyncStorage is Expo's cross-platform adapter: uses localStorage on web,
+    // native secure storage on iOS/Android. No platform split needed.
     storage: AsyncStorage,
     autoRefreshToken: true,
     persistSession: true,
+    // Must stay false for popup-based PKCE (WebBrowser.openAuthSessionAsync).
+    // If true, Supabase JS would auto-call exchangeCodeForSession when it
+    // detects ?code= in the popup redirect URL, racing with our manual call
+    // and consuming the one-time code twice → "code already used" on web.
+    // Only set true for redirect-based (full-page-navigation) web OAuth.
     detectSessionInUrl: false,
   },
 });

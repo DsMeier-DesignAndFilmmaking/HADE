@@ -23,9 +23,12 @@ bearer_scheme = HTTPBearer()
 # ---------------------------------------------------------------------------
 # JWKS cache — Supabase signs tokens with ES256, we need the public key
 # ---------------------------------------------------------------------------
+_JWKS_TTL_SECONDS = 3600   # re-fetch the full keyset every hour
+_JWKS_RETRY_SECONDS = 30   # but retry quickly after a transient failure
+
 _jwks_cache: dict[str, object] | None = None
 _jwks_fetched_at: float = 0.0
-_JWKS_TTL_SECONDS = 3600
+_jwks_last_failed_at: float = 0.0  # distinguish "never tried" from "failed"
 
 
 @dataclass(frozen=True)
@@ -37,11 +40,27 @@ class AuthContext:
 
 
 async def _get_supabase_jwks() -> dict[str, object] | None:
-    """Fetch and cache the Supabase JWKS keyset."""
-    global _jwks_cache, _jwks_fetched_at
+    """Fetch and cache the Supabase JWKS keyset.
 
-    if _jwks_cache is not None and (time.monotonic() - _jwks_fetched_at) < _JWKS_TTL_SECONDS:
+    Uses a two-tier TTL:
+    - On success: keyset is cached for ``_JWKS_TTL_SECONDS`` (1 hour).
+    - On failure: retries after ``_JWKS_RETRY_SECONDS`` (30 s) so a transient
+      network hiccup at startup does not block all Supabase JWT validation for
+      the remainder of the hour.
+    """
+    global _jwks_cache, _jwks_fetched_at, _jwks_last_failed_at
+
+    now = time.monotonic()
+
+    # Serve from cache if it is still fresh.
+    if _jwks_cache is not None and (now - _jwks_fetched_at) < _JWKS_TTL_SECONDS:
         return _jwks_cache
+
+    # If the last fetch failed, respect the retry back-off window.
+    if _jwks_cache is None and _jwks_last_failed_at > 0:
+        if (now - _jwks_last_failed_at) < _JWKS_RETRY_SECONDS:
+            logger.debug("JWKS fetch skipped — in retry back-off window")
+            return None
 
     if not settings.supabase_url:
         return None
@@ -52,12 +71,17 @@ async def _get_supabase_jwks() -> dict[str, object] | None:
             resp = await client.get(url)
             resp.raise_for_status()
         _jwks_cache = resp.json()
-        _jwks_fetched_at = time.monotonic()
-        logger.debug("JWKS fetched from %s", url)
+        _jwks_fetched_at = now
+        _jwks_last_failed_at = 0.0  # reset failure clock on success
+        logger.info("JWKS fetched from %s", url)
         return _jwks_cache
     except Exception as e:
-        logger.debug("JWKS fetch failed from %s: %s", url, e)
-        return _jwks_cache
+        _jwks_last_failed_at = now
+        logger.warning(
+            "JWKS fetch failed from %s: %s — will retry in %ds",
+            url, e, _JWKS_RETRY_SECONDS,
+        )
+        return _jwks_cache  # return stale cache rather than None on transient failures
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +177,7 @@ async def _try_decode_supabase_jwt(
     app_metadata = payload.get("app_metadata", {})
     provider = app_metadata.get("provider") if isinstance(app_metadata, dict) else None
     is_anonymous = bool(payload.get("is_anonymous", False) or provider == "anonymous")
-    logger.debug("Supabase auth resolved: anonymous=%s", is_anonymous)
+    logger.info("Supabase ES256 auth resolved: sub=%s anonymous=%s", sub, is_anonymous)
     return (sub, phone, email, is_anonymous)
 
 
@@ -270,7 +294,7 @@ async def get_current_user_id(
     if auth_context is not None:
         return auth_context.user_id
 
-    logger.debug("Auth failed — returning 401")
+    logger.warning("Auth failed — returning 401")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token",
@@ -288,7 +312,7 @@ async def get_current_auth_context(
     if auth_context is not None:
         return auth_context
 
-    logger.debug("Auth failed — returning 401")
+    logger.warning("Auth failed — returning 401")
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Invalid or expired token",

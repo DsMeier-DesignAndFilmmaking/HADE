@@ -15,6 +15,8 @@ class DecideRequest(BaseModel):
     session_id: UUID | None = None
     # Added provider toggle: defaults to gemini, allows openai
     provider: Literal["gemini", "openai"] = Field(default="gemini", description="LLM provider for rationale generation")
+    # Session-scoped rejection memory — venues the user already pivoted away from
+    rejection_history: list[dict] = Field(default_factory=list, description="Venues rejected this session with venue_name and pivot_reason")
 
 
 class TrustAttribution(BaseModel):

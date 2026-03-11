@@ -10,6 +10,7 @@ import {
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import MapView, { Marker, PROVIDER_GOOGLE, PROVIDER_DEFAULT } from "react-native-maps";
+import MapViewDirections from "react-native-maps-directions";
 import * as Location from "expo-location";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import { getDistance } from "geolib";
@@ -18,10 +19,14 @@ import type { Opportunity } from "../types";
 import { useDecisionStore, type MapViewport } from "../store/useDecisionStore";
 import SignalDropFAB from "../components/SignalDropFAB";
 import VibeGrid from "../components/VibeGrid";
+import * as Haptics from "expo-haptics";
+import { triggerNavigation } from "../services/navigationHelper";
 import {
   getMapProviderOverride,
   type MapProviderOverride,
 } from "../lib/mapProviderOverride";
+
+const GOOGLE_MAPS_API_KEY = "AIzaSyCq1zFRvMSJsWjwCXNN4G-A5-MFDZJs_R0";
 
 // --- Pulse Marker Components ---
 import Animated, { 
@@ -71,6 +76,7 @@ export default function MapSurface(): React.JSX.Element {
   const [providerOverride, setProviderOverride] = useState<MapProviderOverride>("auto");
   const [isVibeSheetOpen, setIsVibeSheetOpen] = useState(false);
   const [userPoint, setUserPoint] = useState<{latitude: number, longitude: number} | null>(null);
+  const [layoutReady, setLayoutReady] = useState(false);
 
   const decisionPrimary = useDecisionStore((s) => s.decision?.primary);
   const decisionFallbacks = useDecisionStore((s) => s.decision?.fallbacks ?? []);
@@ -101,7 +107,6 @@ export default function MapSurface(): React.JSX.Element {
       { latitude: opportunity.geo.lat, longitude: opportunity.geo.lng }
     );
 
-    // Engine Constraint: 200m for production, 10,000km for Debug/Simulator testing
     const maxAllowedDistance = __DEV__ ? 10000000 : 200;
 
     if (distance > maxAllowedDistance) {
@@ -121,6 +126,28 @@ export default function MapSurface(): React.JSX.Element {
     setIsVibeSheetOpen(false);
   }, []);
 
+  const handleNavigate = useCallback(async () => {
+    if (!opportunity) return;
+    const distanceMeters = userPoint
+      ? getDistance(
+          { latitude: userPoint.latitude, longitude: userPoint.longitude },
+          { latitude: opportunity.geo.lat, longitude: opportunity.geo.lng },
+        )
+      : opportunity.distance_meters;
+
+    console.log("[HADE Navigation] Handing off to OS Maps");
+    try {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {}
+
+    await triggerNavigation(
+      opportunity.geo.lat,
+      opportunity.geo.lng,
+      opportunity.venue_name,
+      distanceMeters,
+    );
+  }, [opportunity, userPoint]);
+
   const commitViewport = useCallback((nextRegion: MapViewport) => {
     if (isAnimatingRef.current) return;
     if (isSameViewport(viewportRef.current, nextRegion)) return;
@@ -129,42 +156,38 @@ export default function MapSurface(): React.JSX.Element {
   }, [setLastMapViewport]);
 
   const mapProvider = useMemo(() => {
-    // Force Apple Maps on iOS Simulator to resolve "weird" rendering issues
     if (Platform.OS === 'ios') return PROVIDER_DEFAULT;
-    
     if (providerOverride === "apple") return undefined;
     if (providerOverride === "google") return PROVIDER_GOOGLE;
     return PROVIDER_GOOGLE;
   }, [providerOverride]);
 
-  // Load provider preference
   useEffect(() => {
     getMapProviderOverride().then(setProviderOverride);
   }, []);
 
-  // Sync camera to opportunity if focused
+  const hasUserPoint = !!userPoint;
   useEffect(() => {
-    if (!opportunity?.geo) return;
-    const target = {
-      latitude: opportunity.geo.lat,
-      longitude: opportunity.geo.lng,
-      latitudeDelta: 0.005,
-      longitudeDelta: 0.005,
-    };
+    if (!opportunity?.geo || !userPoint) return;
     isAnimatingRef.current = true;
-    mapRef.current?.animateToRegion(target, 1000);
+    mapRef.current?.fitToCoordinates(
+      [
+        { latitude: userPoint.latitude, longitude: userPoint.longitude },
+        { latitude: opportunity.geo.lat, longitude: opportunity.geo.lng },
+      ],
+      {
+        edgePadding: { top: 120, right: 60, bottom: 260, left: 60 },
+        animated: true,
+      },
+    );
     setTimeout(() => { isAnimatingRef.current = false; }, 1200);
-  }, [opportunityId]);
+  }, [opportunityId, hasUserPoint]);
 
-  // Live Location Watch
   useEffect(() => {
     let subscription: Location.LocationSubscription | null = null;
-    let isFirstFix = true;
-
     (async () => {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") return;
-
       subscription = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.BestForNavigation,
@@ -172,71 +195,103 @@ export default function MapSurface(): React.JSX.Element {
           distanceInterval: 5,
         },
         (location) => {
-          const coords = { 
-            latitude: location.coords.latitude, 
-            longitude: location.coords.longitude 
-          };
-          setUserPoint(coords);
-
-          if ((isFirstFix || !opportunity) && !isAnimatingRef.current) {
-            mapRef.current?.animateToRegion({
-              ...coords,
-              latitudeDelta: 0.008,
-              longitudeDelta: 0.008
-            }, isFirstFix ? 0 : 1000);
-            isFirstFix = false; 
-          }
-        }
+          setUserPoint({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          });
+        },
       );
     })();
-
     return () => subscription?.remove();
   }, [opportunityId]);
 
   return (
-    <View style={styles.container}>
-      <MapView
-        ref={mapRef}
-        style={styles.map}
-        provider={mapProvider}
-        customMapStyle={Platform.OS === 'ios' ? [] : HADE_MAP_STYLE} // Apple Maps doesn't support Google JSON styles
-        initialRegion={viewportRef.current}
-        userInterfaceStyle="dark" 
-        showsUserLocation={true}
-        showsPointsOfInterest={false}
-        showsBuildings={false} // Reduces simulator lag
-        onRegionChangeComplete={commitViewport}
-      >
-        {opportunity && (
-          <Marker
-            coordinate={{ latitude: opportunity.geo.lat, longitude: opportunity.geo.lng }}
-          >
-            <HadePulseMarker />
-          </Marker>
-        )}
+    <View
+      style={styles.container}
+      onLayout={(e) => {
+        const { width, height } = e.nativeEvent.layout;
+        if (width > 0 && height > 0) setLayoutReady(true);
+      }}
+    >
+      {layoutReady && (
+        <MapView
+          ref={mapRef}
+          style={styles.map}
+          provider={mapProvider}
+          customMapStyle={Platform.OS === 'ios' ? [] : HADE_MAP_STYLE}
+          initialRegion={viewportRef.current}
+          userInterfaceStyle="dark" 
+          showsUserLocation={true}
+          showsPointsOfInterest={false}
+          showsBuildings={false}
+          onRegionChangeComplete={commitViewport}
+        >
+          {opportunity && (
+            <Marker coordinate={{ latitude: opportunity.geo.lat, longitude: opportunity.geo.lng }}>
+              <HadePulseMarker />
+            </Marker>
+          )}
 
-        {decisionFallbacks.slice(0, 3).map((fb) => (
-          <Marker
-            key={`fb-${fb.id}`}
-            coordinate={{ latitude: fb.geo.lat, longitude: fb.geo.lng }}
-            opacity={0.4}
-            pinColor="#78716C"
-          />
-        ))}
-      </MapView>
+          {decisionFallbacks.slice(0, 3).map((fb) => (
+            <Marker
+              key={`fb-${fb.id}`}
+              coordinate={{ latitude: fb.geo.lat, longitude: fb.geo.lng }}
+              opacity={0.4}
+              pinColor="#78716C"
+            />
+          ))}
 
-      <TouchableOpacity 
-        style={[styles.backButton, { top: insets.top + 16 }]} 
+          {userPoint && opportunity && (
+            <MapViewDirections
+              origin={{ latitude: userPoint.latitude, longitude: userPoint.longitude }}
+              destination={{ latitude: opportunity.geo.lat, longitude: opportunity.geo.lng }}
+              apikey={GOOGLE_MAPS_API_KEY}
+              mode="WALKING"
+              strokeWidth={4}
+              strokeColor="#F59E0B"
+              onError={(err) => console.warn("[MapDirections]", err)}
+            />
+          )}
+        </MapView>
+      )}
+
+      <TouchableOpacity
+        style={[styles.backButton, { top: insets.top + 16 }]}
         onPress={() => navigation.goBack()}
       >
         <Text style={styles.backChevron}>‹</Text>
       </TouchableOpacity>
 
-      {!isVibeSheetOpen && (
-        <SignalDropFAB 
-          opportunity={opportunity} 
-          onPress={handleOpenVibeGrid} 
-        />
+      {/* Floating Action Layer */}
+      {opportunity && !isVibeSheetOpen && (
+        <>
+          {/* 1. Signal Drop FAB - Inset to match the Nav Card's right edge */}
+          <View style={[styles.fabContainer, { bottom: insets.bottom + 140 }]}>
+            <SignalDropFAB 
+              opportunity={opportunity} 
+              onPress={handleOpenVibeGrid} 
+            />
+          </View>
+
+          {/* 2. Navigation Card */}
+          <View style={[styles.navCard, { bottom: insets.bottom + 24 }]}>
+            <View style={styles.navCardInfo}>
+              <Text style={styles.navCardVenue} numberOfLines={1}>
+                {opportunity.venue_name}
+              </Text>
+              <Text style={styles.navCardMeta}>
+                {opportunity.eta_minutes} MIN · {opportunity.category}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.navCardButton}
+              onPress={handleNavigate}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.navCardButtonText}>Start Navigation</Text>
+            </TouchableOpacity>
+          </View>
+        </>
       )}
 
       <BottomSheet
@@ -293,5 +348,60 @@ const styles = StyleSheet.create({
   },
   pulseWrap: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   pulseRing: { position: 'absolute', width: 30, height: 30, borderRadius: 15, backgroundColor: 'rgba(245, 158, 11, 0.4)' },
-  pulseCore: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#F59E0B', borderWidth: 2, borderColor: '#FFF' }
+  pulseCore: { width: 12, height: 12, borderRadius: 6, backgroundColor: '#F59E0B', borderWidth: 2, borderColor: '#FFF' },
+  
+  // Adjusted UI Layer Layout
+  fabContainer: {
+    position: "absolute",
+    right: 20, // Increased inset to ensure button isn't cut off
+    zIndex: 11,
+    alignItems: "flex-end", // Force children to track right boundary
+  },
+  navCard: {
+    position: "absolute",
+    left: 20,
+    right: 20,
+    backgroundColor: "#171717",
+    borderRadius: 24,
+    padding: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    borderWidth: 1,
+    borderColor: "#262626",
+    zIndex: 10,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.6,
+    shadowRadius: 16,
+    elevation: 12,
+  },
+  navCardInfo: {
+    flex: 1,
+    marginRight: 16,
+  },
+  navCardVenue: {
+    color: "#FAFAF8",
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  navCardMeta: {
+    color: "#A3A3A3",
+    fontSize: 11,
+    marginTop: 4,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+  },
+  navCardButton: {
+    backgroundColor: "#F59E0B",
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 14,
+  },
+  navCardButtonText: {
+    color: "#000",
+    fontWeight: "900",
+    fontSize: 13,
+  },
 });

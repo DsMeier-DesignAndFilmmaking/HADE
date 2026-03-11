@@ -1,12 +1,11 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Alert,
   Animated,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
-  ActivityIndicator,
   Image,
   ScrollView,
   Keyboard,
@@ -14,7 +13,6 @@ import {
 import MapView, { Marker } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useNavigation } from "@react-navigation/native";
-import { signOut } from "../services/auth";
 import { useSessionStore } from "../store/useSessionStore";
 import { useDecisionStore } from "../store/useDecisionStore";
 import { postDecide, postMoment } from "../services/api";
@@ -24,6 +22,8 @@ import { useLocation } from "../hooks/useLocation";
 
 import RecommendationCard from "../components/RecommendationCard";
 import CreateEventSheet from "../components/CreateEventSheet";
+import PivotSheet, { type PivotType } from "../components/PivotSheet";
+import BottomSheet from "@gorhom/bottom-sheet";
 
 const Haptics = (() => {
   try {
@@ -32,6 +32,28 @@ const Haptics = (() => {
     return null;
   }
 })();
+
+// Cycling "thinking" copy — cycles every 3s while the AI pipeline is running
+const THINKING_LABELS = [
+  "Consulting the city...",
+  "Synthesizing local signals...",
+  "Checking with the neighbors...",
+  "Finding your spot...",
+] as const;
+
+// Pivot-specific thinking labels — shown when user recalibrates from a rejected card
+const PIVOT_THINKING_LABELS: Record<PivotType, readonly string[]> = {
+  energy:   ["Finding a quieter corner...", "Scanning for calmer spaces...", "Tuning the frequency..."],
+  distance: ["Looking closer to your spot...", "Scanning within 500m...", "Finding what's right here..."],
+  vibe:     ["Recalibrating for a new vibe...", "Reading the room differently...", "Finding a new frequency..."],
+};
+
+// Memory-aware labels — shown when the engine has rejection history to learn from
+const MEMORY_THINKING_LABELS = [
+  "Learning your rhythm...",
+  "Refining the search...",
+  "Filtering the noise...",
+] as const;
 
 export default function DecideScreen(): React.JSX.Element {
   const { location } = useLocation();
@@ -45,7 +67,6 @@ export default function DecideScreen(): React.JSX.Element {
   const setDecisionAsync = useDecisionStore((s) => s.setDecisionAsync);
   const clearDecision = useDecisionStore((s) => s.clearDecision);
 
-  const [signingOut, setSigningOut] = useState(false);
   const [intent, setIntent] = useState<Intent | null>(null);
   const [loading, setLoading] = useState(false);
   const [dismissing, setDismissing] = useState(false);
@@ -53,28 +74,43 @@ export default function DecideScreen(): React.JSX.Element {
   const [emptyState, setEmptyState] = useState(false);
   const [showCreateEvent, setShowCreateEvent] = useState(false);
 
+  // Pivot recalibration state
+  const [pivotType, setPivotType] = useState<PivotType | null>(null);
+  const pivotTypeRef = useRef<PivotType | null>(null);  // ref for stale-closure-safe access inside triggerDecision
+  const pivotSheetRef = useRef<BottomSheet>(null);
+
+  // Rejection memory — accumulates venues the user has pivoted away from this session.
+  // Uses a parallel ref so triggerDecision always reads the latest value (no stale closure).
+  const [rejectedVenues, setRejectedVenues] = useState<Array<{ venue_id: string; venue_name: string; pivot_reason: string }>>([]);
+  const rejectedVenuesRef = useRef<Array<{ venue_id: string; venue_name: string; pivot_reason: string }>>([]);
+
+  // Card fade — prevents "flash of empty state" between rejected card and new card
+  const cardOpacity = useRef(new Animated.Value(1)).current;
+
+  // Thinking label cycling — resets on each new request
+  // Uses pivot-specific labels when a pivot is active
+  const [thinkingIndex, setThinkingIndex] = useState(0);
+  useEffect(() => {
+    if (!loading) {
+      setThinkingIndex(0);
+      return;
+    }
+    // Label priority: pivot-specific > memory-aware (has rejections) > generic
+    const activeLabels = pivotType
+      ? PIVOT_THINKING_LABELS[pivotType]
+      : rejectedVenues.length > 0
+        ? MEMORY_THINKING_LABELS
+        : THINKING_LABELS;
+    const interval = setInterval(() => {
+      setThinkingIndex((i) => (i + 1) % activeLabels.length);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [loading, pivotType, rejectedVenues.length]);
+
   const mapHeight = useRef(new Animated.Value(0)).current;
   const mapRef = useRef<MapView | null>(null);
 
   const primary: Opportunity | undefined = decision?.primary;
-
-  const handleSignOut = (): void => {
-    Alert.alert("Sign out", "Are you sure?", [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Sign out",
-        style: "destructive",
-        onPress: async () => {
-          setSigningOut(true);
-          try {
-            await signOut();
-          } catch {
-            setSigningOut(false);
-          }
-        },
-      },
-    ]);
-  };
 
   const handleReset = useCallback(() => {
     Animated.timing(mapHeight, {
@@ -88,6 +124,9 @@ export default function DecideScreen(): React.JSX.Element {
     setIntent(null);
     setLoading(false);
     setDismissing(false);
+    // Clear rejection memory on full reset — user is starting a fresh session
+    setRejectedVenues([]);
+    rejectedVenuesRef.current = [];
   }, [clearDecision, mapHeight]);
 
   const handleDismiss = useCallback(async () => {
@@ -142,20 +181,31 @@ export default function DecideScreen(): React.JSX.Element {
   const triggerDecision = useCallback(
     async (selectedIntent: Intent) => {
       Keyboard.dismiss();
-      
+
       const lat = location?.latitude || 39.7541;
       const lng = location?.longitude || -104.9998;
+
+      // Read active pivot and rejection history from refs (avoids stale closure)
+      const activePivot = pivotTypeRef.current;
+      const activeRejections = rejectedVenuesRef.current;
 
       setLoading(true);
       setEmptyState(false);
       setDecision(null);
 
+      // Build pivot-specific API params — OpenAI/Gemini prompt logic untouched
+      const pivotParams: { energy_level?: string; radius_meters?: number } = {};
+      if (activePivot === "energy")   pivotParams.energy_level  = "chill";
+      if (activePivot === "distance") pivotParams.radius_meters = 500;
+
       try {
         const response = await postDecide({
-          geo: { lat, lng }, 
+          geo: { lat, lng },
           intent: selectedIntent,
           group_size: 1,
-          provider: llmProvider, // <--- CRITICAL: Pass the global store value here
+          provider: llmProvider,
+          ...pivotParams,
+          ...(activeRejections.length > 0 && { rejection_history: activeRejections }),
         });
 
         if (response.status !== "ok" || !response.data?.primary) {
@@ -178,14 +228,52 @@ export default function DecideScreen(): React.JSX.Element {
         clearDecision();
       } finally {
         setLoading(false);
+        // Clear pivot after use so next normal request has no stale params
+        pivotTypeRef.current = null;
+        setPivotType(null);
+        // Restore card opacity if not already 1 (e.g. pivot fade completed)
+        Animated.timing(cardOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start();
       }
     },
-    [location, llmProvider, setDecisionAsync, clearDecision] // CRITICAL: 'location' must be in the dependency array
+    [location, llmProvider, setDecisionAsync, clearDecision, cardOpacity]
   );
 
   const handleIntentSelection = (val: Intent) => {
     setIntent(val);
     triggerDecision(val);
+  };
+
+  // Pivot recalibration — called from PivotSheet
+  const handlePivot = (type: PivotType) => {
+    const currentIntent = intent;
+
+    if (type === "vibe") {
+      // "Change the vibe" → fade out card, reset to intent chip view
+      Animated.timing(cardOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+        handleReset();
+        Animated.timing(cardOpacity, { toValue: 1, duration: 400, useNativeDriver: true }).start();
+      });
+      return;
+    }
+
+    if (!currentIntent) return; // safety guard
+
+    // Record the rejected venue BEFORE triggering — ref is read synchronously in triggerDecision
+    if (primary) {
+      const rejection = { venue_id: primary.id, venue_name: primary.venue_name, pivot_reason: type };
+      const updated = [...rejectedVenuesRef.current, rejection];
+      rejectedVenuesRef.current = updated;
+      setRejectedVenues(updated);
+    }
+
+    // Set pivot type synchronously via ref before triggerDecision reads it
+    pivotTypeRef.current = type;
+    setPivotType(type); // triggers pivot-specific thinking labels
+
+    // Soft fade: old card out → trigger new fetch → card fades back in (inside triggerDecision finally)
+    Animated.timing(cardOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+      triggerDecision(currentIntent);
+    });
   };
 
   return (
@@ -210,8 +298,13 @@ export default function DecideScreen(): React.JSX.Element {
               <Text style={styles.username}>@{user?.username || "hade_user"}</Text>
             </View>
           </View>
-          <Pressable onPress={handleSignOut} disabled={signingOut} style={styles.signOutButton}>
-            <Text style={styles.signOutText}>{signingOut ? "…" : "Sign out"}</Text>
+          {/* Balanced right tap — navigates to Profile/Settings */}
+          <Pressable
+            onPress={() => navigation.navigate("Profile")}
+            style={styles.settingsButton}
+            hitSlop={12}
+          >
+            <Text style={styles.settingsIcon}>⚙</Text>
           </Pressable>
         </View>
 
@@ -237,27 +330,42 @@ export default function DecideScreen(): React.JSX.Element {
                 ))}
               </View>
 
-              <Pressable onPress={() => setShowCreateEvent(true)} style={styles.hostLink}>
-                <Text style={styles.hostLinkText}>Or host something yourself</Text>
-              </Pressable>
             </View>
           )}
 
-          {loading && (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color="#F59E0B" />
-              <Text style={styles.loadingText}>Synthesizing the city...</Text>
-            </View>
-          )}
+          {loading && (() => {
+            const activeLabels = pivotType
+              ? PIVOT_THINKING_LABELS[pivotType]
+              : rejectedVenues.length > 0
+                ? MEMORY_THINKING_LABELS
+                : THINKING_LABELS;
+            return (
+              <View style={styles.thinkingCard}>
+                <Text style={styles.thinkingLabel}>
+                  {activeLabels[thinkingIndex % activeLabels.length]}
+                </Text>
+              </View>
+            );
+          })()}
 
           {primary && !loading && (
-            <View style={styles.recommendationWrapper}>
+            <Animated.View style={[styles.recommendationWrapper, { opacity: cardOpacity }]}>
               <RecommendationCard
                 opportunity={primary}
                 onGo={runMediumHaptic}
                 onDismiss={handleDismiss}
                 onDetails={runMediumHaptic}
               />
+
+              {/* "Not the move?" — contextual pivot trigger */}
+              <Pressable
+                style={styles.pivotTrigger}
+                onPress={() => pivotSheetRef.current?.expand()}
+                hitSlop={16}
+              >
+                <Text style={styles.pivotTriggerText}>Not the move?</Text>
+              </Pressable>
+
               <Animated.View style={[styles.mapPreview, { height: mapHeight }]}>
                 <MapView
                   ref={mapRef}
@@ -277,7 +385,7 @@ export default function DecideScreen(): React.JSX.Element {
                   />
                 </MapView>
               </Animated.View>
-            </View>
+            </Animated.View>
           )}
 
           {emptyState && !loading && (
@@ -292,6 +400,9 @@ export default function DecideScreen(): React.JSX.Element {
       </ScrollView>
 
       <CreateEventSheet visible={showCreateEvent} onClose={() => setShowCreateEvent(false)} />
+
+      {/* Pivot recalibration sheet — "Not the move?" */}
+      <PivotSheet sheetRef={pivotSheetRef} onPivot={handlePivot} />
     </SafeAreaView>
   );
 }
@@ -303,8 +414,8 @@ const styles = StyleSheet.create({
   userTextContainer: { marginLeft: 12 },
   displayName: { color: "#FAFAF8", fontWeight: "800", fontSize: 16 },
   username: { color: "#57534E", fontSize: 12 },
-  signOutButton: { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, backgroundColor: "#1A1A1A" },
-  signOutText: { color: "#78716C", fontSize: 11, fontWeight: "600" },
+  settingsButton: { width: 36, height: 36, borderRadius: 18, backgroundColor: "#1A1A1A", alignItems: "center", justifyContent: "center" },
+  settingsIcon: { color: "#57534E", fontSize: 16 },
   profileButton: { width: 48, height: 48 },
   avatarContainer: { width: 48, height: 48, borderRadius: 24, backgroundColor: "#262626", justifyContent: "center", alignItems: "center", borderWidth: 1.5, borderColor: "#F59E0B" },
   avatarImage: { width: "100%", height: "100%", borderRadius: 24 },
@@ -317,9 +428,28 @@ const styles = StyleSheet.create({
   intentChipActive: { backgroundColor: "#F59E0B", borderColor: "#F59E0B" },
   intentText: { color: "#FAFAF8", fontWeight: "800", fontSize: 14, letterSpacing: 0.5 },
   intentTextActive: { color: "#0D0D0D" },
-  loadingContainer: { alignItems: "center", justifyContent: 'center' },
-  loadingText: { color: "#A8A29E", fontSize: 16, fontWeight: "600", marginTop: 24 },
+  thinkingCard: {
+    backgroundColor: "#F9F7F2",
+    borderRadius: 28,
+    padding: 48,
+    marginHorizontal: 0,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 200,
+  },
+  thinkingLabel: {
+    color: "#1A1A1A",
+    fontSize: 22,
+    fontFamily: Platform.select({ ios: "Georgia", android: "serif" }),
+    fontStyle: "italic",
+    textAlign: "center",
+    letterSpacing: -0.3,
+    lineHeight: 30,
+  },
   recommendationWrapper: { flex: 1 },
+  pivotTrigger: { alignItems: "center", paddingVertical: 14 },
+  // #78716C (warm gray) is readable on #0D0D0D dark background; spec #1A1A1A is for the sheet interior
+  pivotTriggerText: { color: "#78716C", fontSize: 14, fontFamily: Platform.select({ ios: "Georgia", android: "serif" }), fontStyle: "italic", textDecorationLine: "underline" },
   emptyCard: { backgroundColor: "#1A1A1A", padding: 32, borderRadius: 20, alignItems: "center", borderWidth: 1, borderColor: "#262626" },
   emptyTitle: { color: "#FAFAF8", fontSize: 18, fontWeight: "700", textAlign: "center", lineHeight: 24 },
   resetButton: { marginTop: 24, padding: 12 },

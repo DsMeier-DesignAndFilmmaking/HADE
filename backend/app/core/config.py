@@ -22,11 +22,12 @@ class Settings(BaseSettings):
     supabase_url: str = Field("", validation_alias="SUPABASE_URL")
     supabase_anon_key: str = Field("", validation_alias="SUPABASE_ANON_KEY")
     supabase_service_role_key: str = Field("", validation_alias="SUPABASE_SERVICE_ROLE_KEY")
+    # Dev-only HS256 JWT (issued by /auth/dev/* endpoints — never used for Supabase tokens)
     jwt_secret: str = Field("", validation_alias="JWT_SECRET")
     jwt_algorithm: str = "HS256"
     jwt_expiry_minutes: int = 60
-    supabase_jwt_secret: str = ""
-    supabase_auth_algorithm: str = "HS256"
+    # NOTE: Supabase tokens are verified with ES256 via JWKS in app/api/deps.py.
+    # There is no HS256 secret for Supabase JWTs — do not add one here.
 
     # Redis (Required for Rate Limiting and Celery Results)
     redis_url: str = Field("redis://localhost:6379/0", validation_alias="REDIS_URL")

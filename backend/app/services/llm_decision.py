@@ -128,9 +128,14 @@ def _vibe_label(strength: float) -> str:
 # Prompt Builder
 # -----------------------------------------------------------------------------
 
-def _build_prompt(context: ContextState, candidate_set: CandidateSet) -> str:
+def _build_prompt(
+    context: ContextState,
+    candidate_set: CandidateSet,
+    rejection_history: list[dict] | None = None,
+) -> str:
     """
     Constructs the Agentic Prompt with the strict JSON schema confirmed via testing.
+    Appends a Negative Constraints block when the session has rejection history.
     """
     candidates_data = [
         {
@@ -143,6 +148,21 @@ def _build_prompt(context: ContextState, candidate_set: CandidateSet) -> str:
         }
         for c in candidate_set.candidates[:5]
     ]
+
+    # Build the optional negative constraints block — appended only when rejections exist.
+    # We use venue_name (not UUID) so the LLM can match against the candidates list.
+    negative_block = ""
+    if rejection_history:
+        lines = "\n".join(
+            f'- "{r.get("venue_name", r.get("venue_id", "unknown"))}" '
+            f'(user pivot: {r.get("pivot_reason", "unknown")})'
+            for r in rejection_history
+        )
+        negative_block = (
+            f"\nNEGATIVE CONSTRAINTS — the user already rejected these venues this session. "
+            f"Do NOT select them:\n{lines}\n"
+            f"Choose a venue that is NOT in this list.\n"
+        )
 
     # Double braces {{ }} are required for Python .format() literal strings
     return f"""
@@ -168,7 +188,7 @@ RULES:
 1. Lead with the human name in the rationale.
 2. Present tense only.
 3. Return ONLY valid JSON. No markdown backticks.
-"""
+{negative_block}"""
 
 # -----------------------------------------------------------------------------
 # Gemini Provider
@@ -238,6 +258,7 @@ async def make_llm_decision(
     candidate_set: CandidateSet,
     context: ContextState,
     provider: str = "gemini",
+    rejection_history: list[dict] | None = None,
 ) -> LlmDecisionResult:
 
     # 1. Rule-based check: If no candidates or low confidence, skip LLM
@@ -249,8 +270,8 @@ async def make_llm_decision(
             model_name="rule-engine",
         )
 
-    # 2. Build the Agentic Prompt
-    prompt = _build_prompt(context, candidate_set)
+    # 2. Build the Agentic Prompt (with optional rejection constraints)
+    prompt = _build_prompt(context, candidate_set, rejection_history=rejection_history)
 
     try:
         # 3. Call the chosen AI provider
