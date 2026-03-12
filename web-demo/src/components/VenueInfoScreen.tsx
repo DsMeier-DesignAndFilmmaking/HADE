@@ -6,6 +6,7 @@ import { timeAgo } from "@/lib/utils";
 
 interface VenueInfoScreenProps {
   opportunity: Opportunity;
+  onBack: () => void;
   onGo: () => void;
 }
 
@@ -89,7 +90,7 @@ const FALLBACK_STATIC = {
 };
 
 // ── Component ────────────────────────────────────────────
-export default function VenueInfoScreen({ opportunity, onGo }: VenueInfoScreenProps) {
+export default function VenueInfoScreen({ opportunity, onBack, onGo }: VenueInfoScreenProps) {
   const {
     id,
     venue_name,
@@ -106,6 +107,18 @@ export default function VenueInfoScreen({ opportunity, onGo }: VenueInfoScreenPr
 
   return (
     <div className="w-full h-full flex flex-col overflow-hidden">
+
+      {/* ── Back button ── */}
+      <button
+        onClick={onBack}
+        aria-label="Back to recommendation"
+        className="absolute top-[52px] left-4 z-20 flex items-center gap-1.5 text-hade-muted-light hover:text-hade-text transition-colors"
+      >
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+        <span className="text-[13px] font-semibold">Back</span>
+      </button>
 
       {/* ── Scrollable body ── */}
       <div className="flex-1 overflow-y-auto pt-[70px] pb-3 px-5">

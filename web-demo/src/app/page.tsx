@@ -186,6 +186,12 @@ export default function Page() {
     setStepIndex(4);
   }, []);
 
+  // ── Back from INFO → RECOMMENDATION (3) ──
+  const handleInfoBack = useCallback(() => {
+    setDirection(-1);
+    setStepIndex(3);
+  }, []);
+
   // ── "Let's Go" on recommendation or info → MAP (5) ──
   const handleGo = useCallback(() => {
     setDirection(1);
@@ -257,6 +263,7 @@ export default function Page() {
           {currentStep === "INFO" && opportunity && (
             <VenueInfoScreen
               opportunity={opportunity}
+              onBack={handleInfoBack}
               onGo={handleGo}
             />
           )}
