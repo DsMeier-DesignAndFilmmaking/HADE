@@ -47,7 +47,10 @@
       "Bash(npm view tar versions --json)",
       "Bash(nvm use 20)",
       "Bash(nvm use --delete-prefix v20.20.1)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(npx create-next-app@latest web-demo --typescript --tailwind --app --src-dir=false --import-alias=\"@/*\" --no-eslint --no-turbopack)",
+      "Bash(npx create-next-app@latest web-demo --typescript --tailwind --app --src-dir=false --import-alias=\"@/*\" --no-eslint --no-turbopack --yes)",
+      "Bash(npx next:*)"
     ]
   }
 }

@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "mapbox-gl/dist/mapbox-gl.css";
+
+@theme inline {
+  /* ─── HADE Color System ─── */
+  --color-hade-bg: #0D0D0D;
+  --color-hade-card: #1A1A1A;
+  --color-hade-card-alt: #171717;
+  --color-hade-card-rec: #111111;
+  --color-hade-text: #FAFAF8;
+  --color-hade-amber: #F59E0B;
+  --color-hade-green: #22C55E;
+  --color-hade-blue: #3B82F6;
+  --color-hade-red: #EF4444;
+  --color-hade-muted: #78716C;
+  --color-hade-muted-light: #A8A29E;
+  --color-hade-muted-dark: #57534E;
+  --color-hade-border: #262626;
+  --color-hade-cream: #F9F7F2;
+
+  /* ─── Fonts ─── */
+  --font-body: var(--font-inter);
+  --font-display: var(--font-bricolage);
+
+  /* ─── Radii ─── */
+  --radius-card: 12px;
+  --radius-rec: 32px;
+  --radius-thinking: 28px;
+  --radius-nav: 24px;
+  --radius-btn: 8px;
+  --radius-modal: 16px;
+}
+
+html {
+  height: 100%;
+}
+
+body {
+  /* Centre the handset on the desktop viewport */
+  height: 100svh;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: #050505;
+  color: #FAFAF8;
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+/* ─── Mapbox overrides for HADE dark theme ─── */
+.mapboxgl-map {
+  font-family: var(--font-inter), system-ui, sans-serif;
+}
+
+/* ─── Pulsing venue marker ─── */
+.hade-marker-wrap {
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.hade-marker-ring {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(245, 158, 11, 0.4);
+  animation: hadePulse 1.3s ease-out infinite;
+}
+
+.hade-marker-core {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #F59E0B;
+  border: 2px solid white;
+  z-index: 1;
+}
+
+@keyframes hadePulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.34;
+  }
+  100% {
+    transform: scale(1.95);
+    opacity: 0.02;
+  }
+}
+
+/* ─── User location marker ─── */
+.hade-user-marker {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #3B82F6;
+  border: 3px solid white;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+}

@@ -254,6 +254,7 @@ export default function ZeroAuthOnboardingScreen(): React.JSX.Element {
                 <ActivityIndicator color="#000" size="small" />
               ) : (
                 <Text style={styles.primaryButtonText}>Let's Go</Text>
+                
               )}
             </TouchableOpacity>
           </View>
