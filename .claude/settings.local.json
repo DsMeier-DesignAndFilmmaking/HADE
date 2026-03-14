@@ -50,7 +50,15 @@
       "Bash(echo \"EXIT:$?\")",
       "Bash(npx create-next-app@latest web-demo --typescript --tailwind --app --src-dir=false --import-alias=\"@/*\" --no-eslint --no-turbopack)",
       "Bash(npx create-next-app@latest web-demo --typescript --tailwind --app --src-dir=false --import-alias=\"@/*\" --no-eslint --no-turbopack --yes)",
-      "Bash(npx next:*)"
+      "Bash(npx next:*)",
+      "Bash(grep -r \"Trending\\\\|Discover\\\\|Explore\\\\|Popular\\\\|Based on your preferences\\\\|Users like you\\\\|Curated\\\\|Viral\\\\|Hot right now\\\\|Top-rated\\\\|Points\\\\|Rewards\\\\|Badges\" /Users/danielmeier/Documents/GitHub/HADE/mobile/src --include=*.tsx --include=*.ts)",
+      "Bash(grep -E \"\\(as any|any\\\\\\)\\)\" /Users/danielmeier/Documents/GitHub/HADE/mobile/src/**/*.tsx)",
+      "Bash(grep -l \"moments\\\\|Moment\" /Users/danielmeier/Documents/GitHub/HADE/backend/migrations/versions/*.py)",
+      "Bash(find /Users/danielmeier/Documents/GitHub/HADE/backend -name *.py -type f -exec grep -l \"decision\\\\|departure\\\\|acted_on\\\\|conversion\" {})",
+      "Bash(2)",
+      "Bash(find /Users/danielmeier/Documents/GitHub/HADE/backend -name *seed* -o -name *fixture*)",
+      "Bash(npm info:*)",
+      "Bash(npm list:*)"
     ]
   }
 }

@@ -18,6 +18,8 @@ class TrustContext(BaseModel):
     operator_name: str | None = None
     interaction_type: str | None = None
     environmental_context: str | None = None
+    relationship_label: str | None = None
+    trust_multiplier: float | None = None
     # Backward compatibility for existing UI/prompt consumers.
     friend_name: str | None = None
     signal_text: str | None = None

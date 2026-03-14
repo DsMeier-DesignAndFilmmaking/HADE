@@ -53,12 +53,11 @@
       ]
     },
     "plugins": [
-      "expo-dev-client",
-      "expo-location",
-      "expo-asset",
-      "expo-build-properties",
-      "expo-font"
-    ],
+  "expo-location",
+  "expo-asset",
+  "expo-build-properties",
+  "expo-font"
+], 
     "extra": {
       "eas": {
         "projectId": "698afa3a-1be6-4577-822b-2d0937e1befd"

@@ -182,8 +182,14 @@ export default function DecideScreen(): React.JSX.Element {
     async (selectedIntent: Intent) => {
       Keyboard.dismiss();
 
-      const lat = location?.latitude || 39.7541;
-      const lng = location?.longitude || -104.9998;
+      const lat = location?.latitude || 35.6595; 
+      const lng = location?.longitude || 139.7005;
+
+      if (!location) {
+        console.warn("[HADE] Location not ready, using Tokyo fallback");
+      } else {
+        console.log(`[HADE] Denver Signal: ${lat}, ${lng}`);
+      }
 
       // Read active pivot and rejection history from refs (avoids stale closure)
       const activePivot = pivotTypeRef.current;
@@ -352,6 +358,7 @@ export default function DecideScreen(): React.JSX.Element {
             <Animated.View style={[styles.recommendationWrapper, { opacity: cardOpacity }]}>
               <RecommendationCard
                 opportunity={primary}
+                contextStateId={decision?.context_state_id ?? ""}
                 onGo={runMediumHaptic}
                 onDismiss={handleDismiss}
                 onDetails={runMediumHaptic}
@@ -367,10 +374,11 @@ export default function DecideScreen(): React.JSX.Element {
               </Pressable>
 
               <Animated.View style={[styles.mapPreview, { height: mapHeight }]}>
-                <MapView
+              <MapView
                   ref={mapRef}
                   style={styles.mapInner}
                   userInterfaceStyle="dark"
+                  showsUserLocation={true} // Add this to see your blue dot in Denver
                   scrollEnabled={false}
                   initialRegion={{
                     latitude: primary.geo.lat,

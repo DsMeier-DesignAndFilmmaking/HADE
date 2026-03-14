@@ -47,7 +47,7 @@ api.interceptors.request.use((config) => {
 // Endpoints called DURING the auth setup flow — a 401 here means the backend
 // hasn't yet validated the fresh token, not that the user's session is stale.
 // Signing out in response to these 401s would destroy the just-issued session.
-const AUTO_SIGNOUT_EXEMPT = ["/auth/sync", "/auth/migrate"];
+const AUTO_SIGNOUT_EXEMPT = ["/auth/sync", "/auth/migrate", "/auth/sync-contacts"];
 
 // On 401, clear auth state and sign out — but never during auth setup.
 api.interceptors.response.use(
@@ -82,6 +82,15 @@ export async function postAuthSync(
   params: { username?: string; name?: string },
 ): Promise<ApiResponse<User>> {
   const { data } = await api.post<ApiResponse<User>>("/auth/sync", params);
+  return data;
+}
+
+export async function syncContacts(
+  phoneHashes: string[],
+): Promise<ApiResponse<{ edges_created: number; edges_mutual: number }>> {
+  const { data } = await api.post<
+    ApiResponse<{ edges_created: number; edges_mutual: number }>
+  >("/auth/sync-contacts", { phone_hashes: phoneHashes });
   return data;
 }
 

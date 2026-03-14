@@ -12,6 +12,7 @@ import {
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { Opportunity } from "../types";
 import { timeAgo, isStale } from "../utils/time";
+import { postMoment } from "../services/api";
 import FreshnessIndicator from "../components/FreshnessIndicator";
 
 const Haptics = (() => {
@@ -90,10 +91,19 @@ export default function RecommendationDetailScreen(): React.JSX.Element {
   const trustInitial = (trustName || "H").charAt(0).toUpperCase();
   const resolvedAddress = (route.params?.opportunity as any)?.address || opportunity.venue_name;
 
-  // NEW: Navigate to the MapSurface screen instead of jumping to Google/Apple Maps immediately
+  const contextStateId: string = route.params?.contextStateId ?? "";
+
   const handleGo = useCallback(() => {
+    // Fire-and-forget: log the ACCEPTED moment so DDR is measurable
+    if (contextStateId) {
+      postMoment({
+        context_state_id: contextStateId,
+        opportunity_id: opportunity.id,
+        action: "ACCEPTED",
+      }).catch(() => {/* best-effort analytics */});
+    }
     navigation.navigate("MapSurface", { opportunity });
-  }, [navigation, opportunity]);
+  }, [navigation, opportunity, contextStateId]);
 
   return (
     <SafeAreaView style={styles.safeArea}>

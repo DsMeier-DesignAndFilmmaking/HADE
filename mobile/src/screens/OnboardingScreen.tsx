@@ -1,17 +1,18 @@
 import React, { useState, useRef } from "react";
-import { 
-  StyleSheet, 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  SafeAreaView, 
+import {
+  StyleSheet,
+  View,
+  Text,
+  TouchableOpacity,
+  SafeAreaView,
   Animated,
   ActivityIndicator
 } from "react-native";
 import * as Location from 'expo-location';
 import * as Contacts from 'expo-contacts';
+import * as Crypto from 'expo-crypto';
 import { useSessionStore } from "../store/useSessionStore";
-import { postAuthSync } from "../services/api";
+import { postAuthSync, syncContacts } from "../services/api";
 
 type OnboardingStep = "vision" | "location" | "trust" | "ready";
 
@@ -55,7 +56,50 @@ export default function OnboardingScreen(): React.JSX.Element {
   const handleContactsRequest = async () => {
     setLoading(true);
     try {
-      await Contacts.requestPermissionsAsync();
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status !== "granted") {
+        nextStep("ready");
+        return;
+      }
+
+      // Read contacts with phone numbers only — no names are sent to the backend.
+      const { data: contacts } = await Contacts.getContactsAsync({
+        fields: [Contacts.Fields.PhoneNumbers],
+      });
+
+      // Normalise to E.164 (strip non-digits, prepend +1 for 10-digit US numbers).
+      const normalised = new Set<string>();
+      for (const contact of contacts) {
+        for (const entry of contact.phoneNumbers ?? []) {
+          const digits = (entry.number ?? "").replace(/\D/g, "");
+          if (digits.length === 10) {
+            normalised.add(`+1${digits}`);
+          } else if (digits.length === 11 && digits.startsWith("1")) {
+            normalised.add(`+${digits}`);
+          } else if (digits.length > 7) {
+            normalised.add(`+${digits}`);
+          }
+        }
+      }
+
+      if (normalised.size > 0) {
+        // Hash on-device — raw numbers never leave the phone.
+        const hashes: string[] = [];
+        for (const phone of normalised) {
+          const digest = await Crypto.digestStringAsync(
+            Crypto.CryptoDigestAlgorithm.SHA256,
+            phone,
+          );
+          hashes.push(digest);
+        }
+
+        // Fire-and-forget: don't block onboarding on network failure.
+        syncContacts(hashes).catch((err) => {
+          console.warn("[Onboarding] Contact sync failed:", err);
+        });
+      }
+    } catch (err) {
+      console.warn("[Onboarding] Contact access error:", err);
     } finally {
       setLoading(false);
       nextStep("ready");

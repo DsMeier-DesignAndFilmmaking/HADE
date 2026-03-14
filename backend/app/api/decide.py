@@ -5,10 +5,11 @@ Context Engine → Signal Aggregator → Trust Layer → Scoring → Decision
 """
 
 import logging
+import math
 import time
 import uuid
 from uuid import UUID
-from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -20,11 +21,10 @@ from app.models.venue import Venue
 from app.schemas.common import ApiResponse, ErrorDetail, ResponseMeta
 from app.schemas.decide import DecideRequest, DecideResponse
 from app.services.context_engine import build_context_state
-from app.services.decision_layer import make_decision
 from app.services.google_places import search_nearby
-from app.services.llm_decision import LLM_EMPTY_REASON_DEFAULT, make_llm_decision
+from app.services.llm_decision import make_llm_decision
 from app.services.scoring import score_candidates
-from app.services.signal_aggregator import aggregate_signals
+from app.services.signal_aggregator import AggregatedSignal, aggregate_signals
 from app.services.trust_layer import compute_trust_weights
 
 logger = logging.getLogger(__name__)
@@ -33,14 +33,7 @@ router = APIRouter(tags=["decide"])
 
 # Search radius for venues and signals (meters)
 VENUE_SEARCH_RADIUS_M = 1000
-SIGNAL_SEARCH_RADIUS_M = 1500
-
-# --- AUDIT MODE HELPERS ---
-@dataclass
-class MockAuth:
-    """Temporary mock to bypass JWT requirement for OpenAI/Gemini auditing."""
-    user_id: UUID
-    is_anonymous: bool = False
+SIGNAL_SEARCH_RADIUS_M = 10000
 
 async def _resolve_place_venue_ids(
     place_ids: list[str],
@@ -65,16 +58,9 @@ async def _resolve_place_venue_ids(
 @router.post("/decide", response_model=ApiResponse[DecideResponse | None])
 async def decide(
     request: DecideRequest,
-    # auth_context: AuthContext = Depends(get_current_auth_context), # BYPASSED FOR AUDIT
+    auth_context: AuthContext = Depends(get_current_auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> ApiResponse[DecideResponse | None]:
-    
-    # ── AUDIT BYPASS: Hardcoding a User ID ──
-    # Replace this with your actual Supabase User ID if you want to see YOUR signals
-    # Or keep this dummy UUID just to satisfy the database constraints
-    audit_user_id = UUID("00000000-0000-0000-0000-000000000000")
-    auth_context = MockAuth(user_id=audit_user_id)
-    
     start_ms = time.monotonic()
     request_id = uuid.uuid4()
 
@@ -110,11 +96,52 @@ async def decide(
             lng=request.geo.lng,
             radius_m=SIGNAL_SEARCH_RADIUS_M,
         )
+        print(f"DEBUG: Found {len(signals)} raw signals in DB query.")
+        for s in signals:
+            print(f"DEBUG: Signal from User {s.signal.source_user_id} at {s.signal.venue_id}")
 
-# ── Layer 3: Trust Layer (AUDIT MODE BYPASS) ──
-        trust_weights = {sig.signal.id: 1.0 for sig in signals}
-        friend_names = {}
-        user_names = {}
+        # ── Layer 3: Trust Layer ──
+        trust_result = await compute_trust_weights(
+            signals=signals,
+            user_id=auth_context.user_id,
+            db=db,
+        )
+        trust_weights = trust_result.weights
+        relationship_labels = trust_result.relationship_labels
+        friend_names = trust_result.friend_names
+        user_names = trust_result.user_names
+
+        # Apply trust-weighted decay to signal strengths (per-signal error isolation)
+        weighted_signals: list[AggregatedSignal] = []
+        now = datetime.now(timezone.utc)
+        for sig in signals:
+            try:
+                delta_hours = max(
+                    0.0,
+                    (now - sig.signal.emitted_at).total_seconds() / 3600.0,
+                )
+                trust_multiplier = trust_weights.get(sig.signal.id, 1.0)
+                decayed_strength = sig.signal.strength * math.exp(-0.45 * delta_hours)
+                effective_strength = decayed_strength * trust_multiplier
+                weighted_signals.append(
+                    AggregatedSignal(
+                        signal=sig.signal,
+                        lat=sig.lat,
+                        lng=sig.lng,
+                        age_hours=delta_hours,
+                        decay_strength=decayed_strength,
+                        freshness_multiplier=trust_multiplier,
+                        effective_strength=effective_strength,
+                    )
+                )
+            except Exception:
+                logger.exception(
+                    "decide: failed to score signal_id=%s for user=%s",
+                    getattr(sig.signal, "id", None),
+                    auth_context.user_id,
+                )
+
+        signals = weighted_signals
 
         place_to_venue_id = await _resolve_place_venue_ids(
             place_ids=[place.place_id for place in places],
@@ -132,17 +159,20 @@ async def decide(
             radius_m=VENUE_SEARCH_RADIUS_M,
             friend_names=friend_names,
             user_names=user_names,
+            relationship_labels=relationship_labels,
             place_to_venue_id=place_to_venue_id,
         )
 
         # ── Layer 5: Decision Layer (Now with Provider Toggle) ──
         empty_reason: str | None = None
+        llm_error_message: str | None = None
         llm_used = False
         llm_model = ""
         decision = None
 
         try:
             # CALLING THE AI SERVICE
+            print(f"Signals found: {len(signals)}")
             llm_result = await make_llm_decision(
                 candidate_set=candidate_set,
                 context=context,
@@ -159,31 +189,20 @@ async def decide(
                 decision.provider = llm_model 
                 logger.info(f"AI RATIONALE GENERATED: {decision.primary.rationale}")
 
-        except Exception:
-            logger.exception("decide: llm decision failed, falling back to deterministic layer")
-            decision = await make_decision(
-                candidate_set=candidate_set,
-                context_state_id=context.id,
-                time_of_day=context.time_of_day,
-                user_id=auth_context.user_id,
-                db=db,
-            )
-            if decision is None:
-                empty_reason = LLM_EMPTY_REASON_DEFAULT
-
-        except Exception:
-            logger.exception("decide: llm decision failed, falling back to deterministic layer")
-            decision = await make_decision(
-                candidate_set=candidate_set,
-                context_state_id=context.id,
-                time_of_day=context.time_of_day,
-                user_id=auth_context.user_id,
-                db=db,
-            )
-            if decision is None:
-                empty_reason = LLM_EMPTY_REASON_DEFAULT
+        except Exception as exc:
+            llm_error_message = str(exc) or repr(exc)
+            logger.exception("decide: llm decision failed")
+            decision = None
 
         errors: list[ErrorDetail] = []
+        if llm_error_message:
+            errors.append(
+                ErrorDetail(
+                    code="LLM_ERROR",
+                    message=llm_error_message,
+                    detail="LLM decision failed; returning error for debugging.",
+                )
+            )
         if decision is None and empty_reason:
             errors.append(
                 ErrorDetail(

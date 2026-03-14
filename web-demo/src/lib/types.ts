@@ -44,9 +44,11 @@ export interface TrustAttribution {
 
 export interface PrimarySignal {
   user_name: string;
-  timestamp: string;
-  vibe_label: string;
-  comment: string;
+  timestamp: string; // ISO string
+  vibe_label?: string;
+  signal_summary?: string;
+  content?: string;    // <--- Add this (from your seeder's "content" field)
+  comment?: string;    // (Optional: keep if you still use 'comment' elsewhere)
 }
 
 export type SignalVibe = "fire" | "chill" | "avoid";
@@ -67,12 +69,14 @@ export interface Opportunity {
   distance_meters: number;
   eta_minutes: number;
   rationale: string;
-  trust_attributions: TrustAttribution[];
-  geo: GeoLocation;
-  is_primary: boolean;
-  event: EventInfo | null;
   primary_signal: PrimarySignal | null;
+  geo: {
+    lat: number;
+    lng: number;
+  };
   neighborhood?: string;
+  city?: string;       // <--- Add this (for your global city fallback)
+  is_primary: boolean;
 }
 
 export interface DecideResponse {

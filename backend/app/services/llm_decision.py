@@ -13,7 +13,14 @@ import uuid
 from dataclasses import dataclass
 
 import httpx
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIError,
+    AsyncOpenAI,
+    AuthenticationError,
+    BadRequestError,
+    RateLimitError,
+)
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import settings
@@ -39,7 +46,7 @@ LLM_EMPTY_REASON_DEFAULT = "Nothing great right now — check back around 7."
 GEMINI_MODEL = "gemini-2.5-flash"
 GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
 
-LLM_TIMEOUT = 10.0
+LLM_TIMEOUT = 30.0
 
 _BANNED_TERMS = {
     "trending", "discover", "explore", "popular", "top-rated",
@@ -83,11 +90,22 @@ def _clean_text(value: str | None) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+def _is_mutual_friend(candidate: Candidate) -> bool:
+    return (
+        candidate.trust_context.relationship_label == "Mutual Friend"
+        or candidate.trust_context.is_friend_checkin
+    )
+
+
 def _get_best_name(candidate: Candidate) -> str:
+    if not _is_mutual_friend(candidate):
+        return "A friend"
+    if candidate.trust_context.operator_name:
+        return candidate.trust_context.operator_name
     bundle = candidate.trust_context.signal_bundle
     if bundle and bundle.user_first_name:
         return bundle.user_first_name
-    return candidate.trust_context.operator_name or "A friend"
+    return "A friend"
 
 
 def _fallback_rationale(candidate: Candidate) -> str:
@@ -124,6 +142,10 @@ def _vibe_label(strength: float) -> str:
     return "Calm"
 
 
+def _relationship_label(is_mutual_friend: bool) -> str:
+    return "Mutual Friend" if is_mutual_friend else "Local Explorer"
+
+
 # -----------------------------------------------------------------------------
 # Prompt Builder
 # -----------------------------------------------------------------------------
@@ -142,6 +164,11 @@ def _build_prompt(
             "place_id": c.place_id,
             "venue_name": c.venue_name,
             "human_name": _get_best_name(c),
+            "relationship_label": (
+                c.trust_context.relationship_label
+                or _relationship_label(c.trust_context.is_friend_checkin)
+            ),
+            "trust_multiplier": c.trust_context.trust_multiplier or 1.0,
             "signal_text": c.trust_context.signal_text,
             "mins_ago": c.trust_context.signal_bundle.minutes_ago if c.trust_context.signal_bundle else 0,
             "eta": c.eta_minutes,
@@ -165,13 +192,25 @@ def _build_prompt(
         )
 
     # Double braces {{ }} are required for Python .format() literal strings
+    intent = context.intent_declared or "unknown"
+    time_of_day = context.time_of_day or "unknown"
+    weather = context.weather_condition or "unknown"
+
+    if "unknown" in (intent, time_of_day, weather):
+        logger.warning(
+            "LLM context missing fields: intent=%s time_of_day=%s weather=%s",
+            intent,
+            time_of_day,
+            weather,
+        )
+
     return f"""
 You are the HADE spontaneity engine. Your goal is to choose the best venue for a user based on live human activity.
 
 CONTEXT:
-- Intent: {context.intent_declared}
-- Time: {context.time_of_day}
-- Weather: {context.weather_condition}
+- Intent: {intent}
+- Time: {time_of_day}
+- Weather: {weather}
 
 CANDIDATES:
 {json.dumps(candidates_data)}
@@ -188,6 +227,12 @@ RULES:
 1. Lead with the human name in the rationale.
 2. Present tense only.
 3. Return ONLY valid JSON. No markdown backticks.
+4. Your primary directive is to find SOCIAL CONNECTION. A "Mutual Friend" 5-10km away is ALWAYS a better recommendation than a "Local Explorer" 500m away unless the user explicitly asks for "nearby only".
+5. If trust_multiplier > 1.0, prioritize that venue regardless of distance (within the 10km radius).
+6. Value social connection (Trust > 1.0) higher than pure physical proximity.
+7. If relationship_label is "Mutual Friend", you may use their first name; otherwise use "a friend."
+8. You are a SOCIAL MATCHMAKER, not a navigation app. If a result has a "Mutual Friend" label, it is your PRIMARY choice. Do not choose a "Local Explorer" just because they are closer.
+9. If recommending a Mutual Friend who is further away, acknowledge the distance in the same sentence (e.g., "It's a 15-minute drive, but Jordan is there and you haven't seen them in a while.").
 {negative_block}"""
 
 # -----------------------------------------------------------------------------
@@ -236,19 +281,42 @@ async def _call_gemini(prompt: str) -> LlmDecisionPayload:
 async def _call_openai(prompt: str) -> LlmDecisionPayload:
     if not settings.openai_api_key:
         raise ValueError("OPENAI_API_KEY missing")
+    if not prompt or not isinstance(prompt, str):
+        raise ValueError("Prompt is empty or not a string")
+    if "CANDIDATES:\n[]" in prompt:
+        raise ValueError("Prompt candidates list is empty")
 
     client = AsyncOpenAI(api_key=settings.openai_api_key)
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        temperature=0.1,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": "Return only valid JSON."},
-            {"role": "user", "content": prompt},
-        ],
-    )
-    content = response.choices[0].message.content
-    return LlmDecisionPayload.model_validate_json(content)
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": "Return only valid JSON."},
+                {"role": "user", "content": prompt},
+            ],
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise ValueError("OpenAI returned empty content")
+        return LlmDecisionPayload.model_validate_json(content)
+    except AuthenticationError as e:
+        logger.error("OpenAI Auth Error (401): %s", e)
+        raise
+    except RateLimitError as e:
+        logger.error("OpenAI Rate Limit (429): %s", e)
+        raise
+    except BadRequestError as e:
+        logger.error("OpenAI Bad Request (400): %s", e)
+        raise
+    except APIConnectionError as e:
+        logger.error("OpenAI Connection Error: %s", e)
+        raise
+    except APIError as e:
+        status = getattr(e, "status_code", None)
+        logger.error("OpenAI API Error%s: %s", f" ({status})" if status else "", e)
+        raise
 
 # -----------------------------------------------------------------------------
 # Main Decision Entry
@@ -282,13 +350,7 @@ async def make_llm_decision(
 
     except Exception as e:
         logger.error(f"LLM Decision Failure ({provider}): {type(e).__name__} - {e}")
-        # Fallback to the top candidate (Mock-like behavior but with real data)
-        top = candidate_set.candidates[0]
-        return LlmDecisionResult(
-            decision=_build_decide_response(top, candidate_set.context_state_id, _fallback_rationale(top)),
-            used_llm=False,
-            model_name=f"{provider}-fallback",
-        )
+        raise
 
     # 4. Process the AI Decision
     if payload.empty_state:
@@ -348,7 +410,10 @@ def _build_decide_response(
             trust_attributions=[
                 TrustAttribution(
                     user_name=name,
-                    signal_summary=candidate.trust_context.interaction_type or "LIVE_SIGNAL",
+                    signal_summary=(
+                        candidate.trust_context.relationship_label
+                        or _relationship_label(candidate.trust_context.is_friend_checkin)
+                    ),
                     vibe_label=_vibe_label(candidate.score / 2.0),
                 )
             ],
@@ -359,3 +424,58 @@ def _build_decide_response(
         fallbacks=[],
         context_state_id=context_state_id or uuid.uuid4(),
     )
+
+
+# -----------------------------------------------------------------------------
+# Smoke Test (manual)
+# -----------------------------------------------------------------------------
+
+async def run_openai_smoke_test() -> None:
+    if not settings.openai_api_key:
+        raise ValueError("OPENAI_API_KEY missing")
+
+    prompt = """
+You are the HADE spontaneity engine. Return ONLY valid JSON.
+
+CONTEXT:
+- Intent: casual drink
+- Time: evening
+- Weather: clear
+
+CANDIDATES:
+[
+  {"place_id":"test-1","venue_name":"Drift Bar","human_name":"Maya","relationship_label":"Mutual Friend","trust_multiplier":1.2,"signal_text":"Live band","mins_ago":12,"eta":8}
+]
+
+STRICT OUTPUT SCHEMA:
+{
+  "empty_state": bool,
+  "reason": "Used only if empty_state is true",
+  "selected_place_id": "string matching one of the place_ids above",
+  "rationale": "One sensory sentence starting with the human_name."
+}
+
+RULES:
+1. Lead with the human name in the rationale.
+2. Present tense only.
+3. Return ONLY valid JSON. No markdown backticks.
+"""
+
+    client = AsyncOpenAI(api_key=settings.openai_api_key)
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        temperature=0.1,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": "Return only valid JSON."},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    content = response.choices[0].message.content or ""
+    print(f"OpenAI response (first 100 chars): {content[:100]}")
+
+
+if __name__ == "__main__":
+    import asyncio
+
+    asyncio.run(run_openai_smoke_test())

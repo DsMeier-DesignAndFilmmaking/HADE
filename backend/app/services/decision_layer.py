@@ -61,6 +61,10 @@ def _vibe_label_from_strength(strength: float) -> str:
     return "Calm"
 
 
+def _relationship_label(is_mutual_friend: bool) -> str:
+    return "Mutual Friend" if is_mutual_friend else "Local Explorer"
+
+
 def _generate_rationale(
     candidate: Candidate,
     time_of_day: str,
@@ -91,6 +95,11 @@ def _generate_rationale(
         if candidate.trust_context.signal_text:
             return f'{name}, {time_ago}: "{candidate.trust_context.signal_text}"'
         interaction = candidate.trust_context.interaction_type or "LIVE_SIGNAL"
+        if (
+            (candidate.trust_context.relationship_label == "Mutual Friend")
+            and candidate.distance_meters >= 2000
+        ):
+            return f"It's a longer trip ({eta} min away), but {name} is there."
         return f"{name} {interaction.lower()} {time_ago}. {category} spot, {eta} min walk."
 
     # ── Without signal (cold start / Google Places only) ──
@@ -135,7 +144,7 @@ def _candidate_to_opportunity_out(
     trust_attributions: list[TrustAttribution] = []
     primary_signal: PrimarySignal | None = None
 
-    if candidate.trust_context.is_friend_checkin and candidate.matched_signals:
+    if candidate.matched_signals:
         sig = max(candidate.matched_signals, key=lambda item: item.effective_strength)
         bundle = candidate.trust_context.signal_bundle
         name = (
@@ -150,7 +159,10 @@ def _candidate_to_opportunity_out(
         trust_attributions.append(
             TrustAttribution(
                 user_name=name,
-                signal_summary=candidate.trust_context.interaction_type or "LIVE_SIGNAL",
+                signal_summary=(
+                    candidate.trust_context.relationship_label
+                    or _relationship_label(candidate.trust_context.is_friend_checkin)
+                ),
                 vibe_label=vibe_label,
             )
         )

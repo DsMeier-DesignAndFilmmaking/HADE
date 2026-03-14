@@ -1,8 +1,16 @@
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, decide, events, moments, signals, sync, users, venues
+from app.api import analytics, auth, decide, events, moments, signals, sync, users, venues
 from app.core.config import settings
+
+if settings.sentry_dsn:
+    sentry_sdk.init(
+        dsn=settings.sentry_dsn,
+        traces_sample_rate=0.1,
+        environment="production" if not settings.debug else "development",
+    )
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
@@ -22,6 +30,7 @@ app.include_router(venues.router, prefix=settings.api_v1_prefix)
 app.include_router(users.router, prefix=settings.api_v1_prefix)
 app.include_router(moments.router, prefix=settings.api_v1_prefix)
 app.include_router(events.router, prefix=settings.api_v1_prefix)
+app.include_router(analytics.router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/health")

@@ -1,5 +1,6 @@
 """Layer 4: Scoring System — venue-bound candidates for LLM-grounded inference."""
 
+import logging
 import math
 from uuid import UUID
 
@@ -13,6 +14,8 @@ from app.services.trust_layer import build_venue_trust_contexts
 # Confidence floor: opportunities below this score are not surfaced
 CONFIDENCE_FLOOR = 0.3
 BINDING_RADIUS_M = 50.0
+
+logger = logging.getLogger(__name__)
 
 
 def _haversine_distance(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -92,6 +95,7 @@ def score_candidates(
     radius_m: int = 1000,
     friend_names: dict[UUID, str] | None = None,
     user_names: dict[UUID, str] | None = None,
+    relationship_labels: dict[UUID, str] | None = None,
     place_to_venue_id: dict[str, UUID] | None = None,
 ) -> CandidateSet:
     """Build a venue-bound CandidateSet for inference/LLM reasoning."""
@@ -100,6 +104,8 @@ def score_candidates(
         friend_names = {}
     if user_names is None:
         user_names = {}
+    if relationship_labels is None:
+        relationship_labels = {}
 
     staged_by_place: dict[str, tuple[PlaceResult, float, int, float, list[CandidateSignal]]] = {}
     venue_signals: dict[str, list[CandidateSignal]] = {}
@@ -149,6 +155,7 @@ def score_candidates(
     trust_contexts = build_venue_trust_contexts(
         venue_signals=venue_signals,
         trust_weights=trust_weights,
+        relationship_labels=relationship_labels,
         friend_names=friend_names,
         user_names=user_names,
     )
@@ -157,6 +164,20 @@ def score_candidates(
     env_context = _environmental_context(context)
     for place_id, staged in staged_by_place.items():
         place, distance_m, eta_minutes, raw_score, matched_signals = staged
+
+        max_trust = 1.0
+        if matched_signals:
+            max_trust = max(
+                (trust_weights.get(signal.signal_id, 1.0) for signal in matched_signals),
+                default=1.0,
+            )
+
+        tier_bonus = 0.0
+        if max_trust >= 10.0:
+            tier_bonus = 1000.0
+        elif max_trust >= 5.0:
+            tier_bonus = 500.0
+        raw_score += tier_bonus
 
         signal_boost = 0.0
         for matched in matched_signals:
@@ -167,13 +188,28 @@ def score_candidates(
             trust_context = build_venue_trust_contexts(
                 venue_signals={place_id: matched_signals},
                 trust_weights=trust_weights,
+                relationship_labels=relationship_labels,
                 friend_names=friend_names,
                 user_names=user_names,
             )[place_id]
         trust_context.environmental_context = env_context
 
-        trust_boost = 2.0 if trust_context.is_friend_checkin else 1.0
+        trust_context.trust_multiplier = max_trust
+        if max_trust >= 10.0:
+            trust_context.relationship_label = "Mutual Friend"
+        elif max_trust > 1.0:
+            trust_context.relationship_label = "Follower"
+        else:
+            trust_context.relationship_label = trust_context.relationship_label or "Local Explorer"
+
+        trust_boost = 1.0 + 0.6 * (max_trust - 1.0)
         final_score = raw_score * (1.0 + signal_boost) * trust_boost
+        logger.debug(
+            "[DEBUG] Venue: %s, Score: %.2f, Trust: %.1f",
+            place.name,
+            final_score,
+            max_trust,
+        )
         if final_score < CONFIDENCE_FLOOR:
             continue
 

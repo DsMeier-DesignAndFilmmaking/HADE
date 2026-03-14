@@ -3,34 +3,44 @@ import { StyleSheet, Text, View, TouchableOpacity, Dimensions, Platform } from "
 import { useNavigation } from "@react-navigation/native";
 import type { Opportunity } from "../types";
 import { timeAgo, isStale } from "../utils/time";
+import { postMoment } from "../services/api";
 
 const { width } = Dimensions.get("window");
 
 interface Props {
   opportunity: Opportunity;
+  contextStateId: string;
   onGo: () => void;
   onDismiss: () => void;
   onDetails: () => void;
 }
 
-export default function RecommendationCard({ 
-  opportunity, 
-  onGo, 
-  onDetails 
+export default function RecommendationCard({
+  opportunity,
+  contextStateId,
+  onGo,
+  onDetails
 }: Props): React.JSX.Element {
   const navigation = useNavigation<any>();
   const signal = opportunity.primary_signal;
 
   const handleGoInternal = () => {
     onGo();
+    // Fire-and-forget: log the ACCEPTED moment so DDR is measurable
+    postMoment({
+      context_state_id: contextStateId,
+      opportunity_id: opportunity.id,
+      action: "ACCEPTED",
+    }).catch(() => {/* best-effort analytics */});
     navigation.navigate("MapSurface", { opportunity });
   };
 
   const handleDetailsInternal = () => {
     onDetails();
-    navigation.navigate("RecommendationDetail", { 
+    navigation.navigate("RecommendationDetail", {
       opportunity,
-      isEvent: !!opportunity.event 
+      contextStateId,
+      isEvent: !!opportunity.event
     });
   };
 
@@ -61,10 +71,11 @@ export default function RecommendationCard({
         </View>
       ) : (
         <View style={styles.trustBadge}>
-          <Text style={styles.trustFallbackText}>
-            New discovery in {(opportunity as any).neighborhood || 'Denver'}
-          </Text>
-        </View>
+        <Text style={styles.trustFallbackText}>
+          {/* Remove hardcoded 'Denver' */}
+          New discovery in { (opportunity as any).neighborhood || (opportunity as any).city || 'the area' }
+        </Text>
+      </View>
       )}
 
       {/* REFINED DUAL ACTION BAR */}

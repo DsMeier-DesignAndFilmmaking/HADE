@@ -17,6 +17,7 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://danielmeier@localhost:5432/hade",
         validation_alias="DATABASE_URL"
     )
+    SYNC_DATABASE_URL: str | None = None
 
     # Supabase & Auth
     supabase_url: str = Field("", validation_alias="SUPABASE_URL")
@@ -46,6 +47,9 @@ class Settings(BaseSettings):
     
     gemini_model: str = "gemini-2.5-flash"
     gemini_timeout_ms: int = 2800
+
+    # Observability
+    sentry_dsn: str = Field("", validation_alias="SENTRY_DSN")
 
     # CORS & Rate Limiting
     cors_origins: list[str] = ["*"]

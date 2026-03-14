@@ -37,3 +37,13 @@ class SocialEdge(Base):
     established_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     last_interaction: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     signal_overlap_count: Mapped[int] = mapped_column(default=0)
+
+
+class Friendship(Base):
+    __tablename__ = "friendships"
+    __table_args__ = {"schema": "public"}
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    friend_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(32), default="pending")

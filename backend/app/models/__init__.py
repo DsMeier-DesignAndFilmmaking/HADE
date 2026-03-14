@@ -1,4 +1,4 @@
-from app.models.user import User, SocialEdge
+from app.models.user import User, SocialEdge, Friendship
 from app.models.signal import Signal
 from app.models.venue import Venue
 from app.models.context_state import ContextState
@@ -11,6 +11,7 @@ from app.models.business_account import BusinessAccount
 __all__ = [
     "User",
     "SocialEdge",
+    "Friendship",
     "Signal",
     "Venue",
     "ContextState",

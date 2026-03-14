@@ -31,12 +31,6 @@
           <string>com.googleusercontent.apps.820290079123-etu70nt01v70fpgo4cum6i0t9fsernas</string>
         </array>
       </dict>
-      <dict>
-        <key>CFBundleURLSchemes</key>
-        <array>
-          <string>exp+hade</string>
-        </array>
-      </dict>
     </array>
     <key>CFBundleVersion</key>
     <string>1</string>
