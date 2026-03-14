@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 
 interface HandsetWrapperProps {
   children: React.ReactNode;
-  onBack: () => void;
+  onBack?: () => void;
 }
 
 export default function HandsetWrapper({ children, onBack }: HandsetWrapperProps) {

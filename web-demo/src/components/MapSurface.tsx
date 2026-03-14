@@ -9,7 +9,7 @@ import { USER_LOCATION } from "@/lib/mock-data";
 
 interface MapSurfaceProps {
   opportunity: Opportunity;
-  onNavigate: () => void;
+  onNavigate?: () => void;
 }
 
 export default function MapSurface({ opportunity, onNavigate }: MapSurfaceProps) {
@@ -121,30 +121,21 @@ export default function MapSurface({ opportunity, onNavigate }: MapSurfaceProps)
     });
   }, [opportunity, mapLoaded]);
 
-  // ── No-token fallback ──
-  if (!token) {
-    return (
-      <div className="relative w-full h-full overflow-hidden">
-        <GridMapFallback absolute />
-        <NavOverlay opportunity={opportunity} onNavigate={onNavigate} />
-      </div>
-    );
-  }
-
   return (
-    <div className="relative w-full h-full overflow-hidden">
+    <div className="relative w-full aspect-[9/10] overflow-hidden">
       {/* Inset vignette */}
       <div className="absolute inset-0 z-10 pointer-events-none shadow-[inset_0_0_80px_rgba(0,0,0,0.35)]" />
 
-      {/* Map canvas — hidden behind grid fallback when tiles are blocked */}
-      <div ref={mapContainer} className="w-full h-full" />
-
-      {/* City-grid overlay when tiles are 403'd */}
-      {tilesBlocked && <GridMapFallback absolute />}
+      {/* Map canvas */}
+      {token && !tilesBlocked ? (
+        <div ref={mapContainer} className="w-full h-full" />
+      ) : (
+        <GridMapFallback absolute />
+      )}
 
       {/* "Live Context Engine" badge */}
       <motion.div
-        className="absolute top-[70px] left-4 z-20 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10"
+        className="absolute top-[20px] left-4 z-20 bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10"
         initial={{ opacity: 0, y: -6 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.4, duration: 0.4, ease: "easeOut" as const }}
@@ -160,83 +151,46 @@ export default function MapSurface({ opportunity, onNavigate }: MapSurfaceProps)
   );
 }
 
-// ── Stylised city-grid fallback (shown when no token or tiles are 403'd) ──
+// ── Stylised city-grid fallback ─────────────────────────────
 function GridMapFallback({ absolute }: { absolute?: boolean }) {
   return (
     <div
       className={`${absolute ? "absolute inset-0 z-10" : "flex-1"} overflow-hidden`}
       style={{ background: "#0A0A0A" }}
     >
-      {/* Street grid — two densities to suggest a city block pattern */}
-      <svg
-        className="absolute inset-0 w-full h-full"
-        xmlns="http://www.w3.org/2000/svg"
-        preserveAspectRatio="xMidYMid slice"
-      >
+      <svg className="absolute inset-0 w-full h-full" xmlns="http://www.w3.org/2000/svg">
         <defs>
-          {/* Fine grid (minor streets) */}
           <pattern id="minor" width="28" height="28" patternUnits="userSpaceOnUse">
-            <path d="M 28 0 L 0 0 0 28" fill="none" stroke="rgba(255,255,255,0.028)" strokeWidth="0.5" />
+            <path d="M 28 0 L 0 0 0 28" fill="none" stroke="rgba(255,255,255,0.02)" strokeWidth="0.5" />
           </pattern>
-          {/* Coarse grid (major streets) */}
           <pattern id="major" width="84" height="84" patternUnits="userSpaceOnUse">
-            <path d="M 84 0 L 0 0 0 84" fill="none" stroke="rgba(255,255,255,0.055)" strokeWidth="1" />
+            <path d="M 84 0 L 0 0 0 84" fill="none" stroke="rgba(255,255,255,0.04)" strokeWidth="1" />
           </pattern>
-          {/* Amber glow radial behind the route */}
-          <radialGradient id="glow" cx="50%" cy="50%" r="35%">
-            <stop offset="0%" stopColor="rgba(245,158,11,0.07)" />
-            <stop offset="100%" stopColor="rgba(245,158,11,0)" />
-          </radialGradient>
         </defs>
-
-        {/* Layer order: minor → major → glow */}
         <rect width="100%" height="100%" fill="url(#minor)" />
         <rect width="100%" height="100%" fill="url(#major)" />
-        <rect width="100%" height="100%" fill="url(#glow)" />
-
-        {/* Route line (user top-centre → venue bottom-centre, fixed for demo) */}
-        <line
-          x1="50%" y1="35%"
-          x2="50%" y2="62%"
-          stroke="#F59E0B"
-          strokeWidth="8"
-          strokeLinecap="round"
-          strokeOpacity="0.15"
-        />
-        <line
-          x1="50%" y1="35%"
-          x2="50%" y2="62%"
-          stroke="#F59E0B"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeOpacity="0.85"
-        />
-
-        {/* User dot (blue) */}
         <circle cx="50%" cy="35%" r="6" fill="#3B82F6" />
-        <circle cx="50%" cy="35%" r="10" fill="none" stroke="#3B82F6" strokeWidth="1.5" strokeOpacity="0.4" />
-
-        {/* Venue dot (amber, pulsing via CSS) */}
-        <circle cx="50%" cy="62%" r="7" fill="#F59E0B" className="animate-pulse" />
-        <circle cx="50%" cy="62%" r="14" fill="none" stroke="#F59E0B" strokeWidth="1" strokeOpacity="0.3" />
+        <circle cx="50%" cy="65%" r="6" fill="#F59E0B" className="animate-pulse" />
       </svg>
     </div>
   );
 }
 
 // ── Floating bottom nav strip ─────────────────────────────
+// ── Floating bottom nav strip ─────────────────────────────
 function NavOverlay({
   opportunity,
   onNavigate,
 }: {
   opportunity: Opportunity;
-  onNavigate: () => void;
+  onNavigate?: () => void;
 }) {
+  // FIX: Destructure 'venue_name' instead of 'name'
   const { venue_name, eta_minutes, category } = opportunity;
 
   return (
     <motion.div
-      className="absolute bottom-[44px] left-4 right-4 z-20
+      className="absolute bottom-[20px] left-4 right-4 z-20
         bg-black/65 backdrop-blur-xl rounded-[20px] p-4
         flex items-center justify-between border border-white/[0.08]"
       initial={{ opacity: 0, y: 16 }}
@@ -244,17 +198,20 @@ function NavOverlay({
       transition={{ delay: 0.3, duration: 0.45, ease: "easeOut" as const }}
     >
       <div className="min-w-0 mr-3">
-        <p className="text-hade-text font-bold text-[15px] truncate">{venue_name}</p>
-        <p className="text-hade-muted text-[11px] font-semibold uppercase tracking-wide mt-0.5">
+        {/* Update 'name' to 'venue_name' here */}
+        <p className="text-white font-bold text-[15px] truncate">{venue_name}</p>
+        <p className="text-white/50 text-[11px] font-semibold uppercase tracking-wide mt-0.5">
           {eta_minutes} min &middot; {category}
         </p>
       </div>
-      <button
-        onClick={onNavigate}
-        className="bg-hade-amber text-black font-black text-[13px] px-4 py-2.5 rounded-[12px] flex-shrink-0 cursor-pointer whitespace-nowrap"
-      >
-        Navigate →
-      </button>
+      {onNavigate && (
+        <button
+          onClick={onNavigate}
+          className="bg-hade-amber text-black font-black text-[13px] px-4 py-2.5 rounded-[12px] flex-shrink-0 cursor-pointer whitespace-nowrap active:scale-95 transition-transform"
+        >
+          Navigate →
+        </button>
+      )}
     </motion.div>
   );
 }
