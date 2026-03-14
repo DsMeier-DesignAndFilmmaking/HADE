@@ -9,16 +9,16 @@ interface HandsetWrapperProps {
 
 export default function HandsetWrapper({ children, onBack }: HandsetWrapperProps) {
   return (
-    // ── Desktop viewport: centres the phone frame ──
-    <div className="fixed inset-0 flex items-center justify-center bg-[#050505] overflow-hidden"
+    // Outer Container: Stays fixed and dark on desktop, transparent background on mobile
+    <div className="fixed inset-0 flex items-center justify-center bg-[#050505] overflow-hidden sm:p-6"
       style={{
         backgroundImage:
           "radial-gradient(ellipse 80% 60% at 50% 50%, rgba(245,158,11,0.03) 0%, transparent 70%)",
       }}
     >
-      {/* Outer glow ring (decorative) */}
+      {/* ── Desktop-Only Glow Ring ── */}
       <motion.div
-        className="absolute rounded-[48px] pointer-events-none"
+        className="hidden md:block absolute rounded-[48px] pointer-events-none"
         style={{
           width: "calc(min(calc(100svh - 48px) * 9 / 19.5, 390px) + 2px)",
           height: "calc(min(100svh - 48px, 844px) + 2px)",
@@ -27,44 +27,45 @@ export default function HandsetWrapper({ children, onBack }: HandsetWrapperProps
           filter: "blur(1px)",
         }}
         animate={{ opacity: [0.6, 1, 0.6] }}
-        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" as const }}
+        transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
       />
 
-      {/* ── Phone Frame ── */}
+      {/* ── Main Container ── */}
+      {/* Mobile: Full screen, no rounded corners, no border */}
+      {/* Desktop: Centered, fixed aspect ratio, rounded corners, border */}
       <div
-        className="relative bg-[#0D0D0D] rounded-[44px] border border-white/[0.08] overflow-hidden"
+        className={`
+          relative w-full h-full 
+          md:w-auto md:h-[calc(min(100svh-48px,844px))] 
+          md:aspect-[9/19.5] 
+          md:rounded-[44px] md:border md:border-white/[0.08]
+          bg-[#0D0D0D] overflow-hidden transition-all duration-500
+        `}
         style={{
-          aspectRatio: "9 / 19.5",
-          height: "calc(min(100svh - 48px, 844px))",
-          boxShadow: [
-            "0 0 0 1px rgba(255,255,255,0.04)",
-            "0 30px 100px rgba(0,0,0,0.95)",
-            "0 0 80px rgba(245,158,11,0.06)",
-            "inset 0 0 0 1px rgba(255,255,255,0.02)",
-          ].join(", "),
+          boxShadow: "0 30px 100px rgba(0,0,0,0.95), 0 0 80px rgba(245,158,11,0.06)",
         }}
       >
-        {/* ── Dynamic Island ── */}
+        {/* ── Dynamic Island: Hidden on mobile (use the actual phone notch) ── */}
         <div
-          className="absolute top-[14px] left-1/2 -translate-x-1/2 z-50 bg-black rounded-[20px]"
+          className="hidden md:block absolute top-[14px] left-1/2 -translate-x-1/2 z-50 bg-black rounded-[20px]"
           style={{ width: 126, height: 37 }}
         />
 
-        {/* ── Side bezels (decorative sheen) ── */}
-        <div className="absolute inset-y-0 left-0 w-[1px] bg-gradient-to-b from-white/10 via-white/5 to-transparent pointer-events-none" />
-        <div className="absolute inset-y-0 right-0 w-[1px] bg-gradient-to-b from-white/10 via-white/5 to-transparent pointer-events-none" />
+        {/* ── Side Bezels: Hidden on mobile ── */}
+        <div className="hidden md:block absolute inset-y-0 left-0 w-[1px] bg-gradient-to-b from-white/10 via-white/5 to-transparent pointer-events-none" />
+        <div className="hidden md:block absolute inset-y-0 right-0 w-[1px] bg-gradient-to-b from-white/10 via-white/5 to-transparent pointer-events-none" />
 
-        {/* ── Screen content slot ── */}
+        {/* ── Screen Content Slot ── */}
         <div className="absolute inset-0 overflow-hidden">
           {children}
         </div>
 
-        {/* ── Home Indicator ── */}
+        {/* ── Home Indicator: Optional on mobile as modern phones have a hardware one ── */}
         <button
           onClick={onBack}
           aria-label="Back"
-          className="absolute bottom-[8px] left-1/2 -translate-x-1/2 z-50 cursor-pointer group"
-          style={{ width: 134, height: 20, display: "flex", alignItems: "center", justifyContent: "center" }}
+          className="absolute bottom-[8px] left-1/2 -translate-x-1/2 z-50 cursor-pointer group md:flex hidden"
+          style={{ width: 134, height: 20, alignItems: "center", justifyContent: "center" }}
         >
           <div className="w-full h-[5px] bg-white/25 rounded-full transition-colors group-hover:bg-white/45" />
         </button>
