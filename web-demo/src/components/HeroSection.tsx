@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 
 interface HeroSectionProps {
   onStart: () => void;
+  contextLabel?: string;
 }
 
 const container = {
@@ -24,7 +25,21 @@ const fadeUp = {
   },
 };
 
-export default function HeroSection({ onStart }: HeroSectionProps) {
+/** Format current local time as "Friday 9:14 PM" */
+function formatNow(): string {
+  const now = new Date();
+  const day = now.toLocaleDateString("en-US", { weekday: "long" });
+  const time = now.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `${day} ${time}`;
+}
+
+export default function HeroSection({ onStart, contextLabel }: HeroSectionProps) {
+  const displayContext = contextLabel ?? formatNow();
+
   return (
     <div className="w-full h-full flex flex-col pt-[62px] pb-[28px] px-5 overflow-hidden">
       {/* Ambient amber glow */}
@@ -61,12 +76,12 @@ export default function HeroSection({ onStart }: HeroSectionProps) {
           The city is on your side tonight.
         </motion.h1>
 
-        {/* Context line */}
+        {/* Context line — dynamic time + location */}
         <motion.p
           className="text-hade-muted text-[13px] tracking-wide"
           variants={fadeUp}
         >
-          Friday 9:14 PM &middot; Denver, CO &middot; 62&deg;F Clear
+          {displayContext}
         </motion.p>
       </motion.div>
 

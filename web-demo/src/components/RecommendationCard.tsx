@@ -11,10 +11,22 @@ interface RecommendationCardProps {
 }
 
 export default function RecommendationCard({ opportunity, onGo, onInfo }: RecommendationCardProps) {
-  const { category, eta_minutes, venue_name, rationale, primary_signal, neighborhood } = opportunity;
+  const { 
+    category, 
+    eta_minutes, 
+    venue_name, 
+    rationale, 
+    primary_signal, 
+    neighborhood,
+    city 
+  } = opportunity;
 
-  const headline = primary_signal?.comment ?? rationale;
+  // Use the specific user comment if available, otherwise fallback to the engine rationale
+  const headline = primary_signal?.comment || rationale;
   const firstInitial = primary_signal?.user_name?.charAt(0).toUpperCase() ?? "";
+  
+  // Clean context string for the fallback state
+  const locationContext = neighborhood || city || "the area";
 
   return (
     <div className="w-full h-full flex flex-col pt-[62px] pb-[28px] px-5 overflow-y-auto">
@@ -31,7 +43,7 @@ export default function RecommendationCard({ opportunity, onGo, onInfo }: Recomm
           <span className="uppercase text-[10px] font-black tracking-[1.5px] text-hade-amber">
             {category}
           </span>
-          <span className="text-hade-muted text-[10px] font-semibold">
+          <span className="text-hade-muted text-[10px] font-semibold uppercase">
             {eta_minutes}M AWAY
           </span>
         </div>
@@ -62,7 +74,7 @@ export default function RecommendationCard({ opportunity, onGo, onInfo }: Recomm
             </>
           ) : (
             <p className="text-hade-muted-light text-xs italic">
-              New discovery in {neighborhood ?? "the area"}
+              New discovery in {locationContext}
             </p>
           )}
         </div>
@@ -123,8 +135,8 @@ export default function RecommendationCard({ opportunity, onGo, onInfo }: Recomm
           </div>
 
           <p className="font-[Georgia,serif] italic text-hade-muted-dark text-[12px] leading-relaxed">
-            HADE trusts {primary_signal.user_name} because she&apos;s in your social graph.
-            Her signal outweighs 10,000 anonymous reviews.
+            HADE trusts {primary_signal.user_name} because they are in your social graph. 
+            Their real-time presence outweighs static reviews.
           </p>
         </motion.div>
       )}

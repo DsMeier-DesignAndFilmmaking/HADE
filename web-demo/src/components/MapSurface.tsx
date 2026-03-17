@@ -5,14 +5,16 @@ import { motion } from "framer-motion";
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import type { Opportunity } from "@/lib/types";
-import { USER_LOCATION } from "@/lib/mock-data";
 
 interface MapSurfaceProps {
   opportunity: Opportunity;
+  userLocation?: { lat: number; lng: number };
   onNavigate?: () => void;
 }
 
-export default function MapSurface({ opportunity, onNavigate }: MapSurfaceProps) {
+export default function MapSurface({ opportunity, userLocation, onNavigate }: MapSurfaceProps) {
+  // Fall back to the venue's own geo when the user's location is unavailable
+  const USER_LOCATION = userLocation ?? opportunity.geo;
   const mapContainer = useRef<HTMLDivElement>(null);
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);

@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 
 import type { Intent, Opportunity } from "@/lib/types";
 import { mockDecide } from "@/lib/mock-data";
+import { useGeolocation } from "@/hooks/useGeolocation";
 
 import HandsetWrapper from "@/components/HandsetWrapper";
 import HeroSection from "@/components/HeroSection";
@@ -64,11 +65,26 @@ const slideVariants = {
   }),
 };
 
+/** Formats current local time as "Friday 9:14 PM · Your Location" */
+function buildContextLabel(cityLabel: string): string {
+  const now = new Date();
+  const day = now.toLocaleDateString("en-US", { weekday: "long" });
+  const time = now.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `${day} ${time} · ${cityLabel}`;
+}
+
 export default function Page() {
   const [stepIndex, setStepIndex] = useState(0);
   const [direction, setDirection] = useState(1);
   const [selectedIntent, setIntent] = useState<Intent | null>(null);
   const [opportunity, setOpportunity] = useState<Opportunity | null>(null);
+
+  // ── Real browser geolocation ──────────────────────────
+  const { location, error: geoError, loading: geoLoading } = useGeolocation();
 
   const currentStep = STEPS[stepIndex];
 
@@ -94,31 +110,55 @@ export default function Page() {
   }, []);
 
   const handleThinkingComplete = useCallback(() => {
+    if (!location) {
+      // Location never resolved — bounce back to HERO so the error banner is visible
+      console.warn("[HADE] Coordinates unavailable at decision time. Returning to start.");
+      setDirection(-1);
+      setStepIndex(0);
+      return;
+    }
     const resolved = selectedIntent ?? "drink";
-    const response = mockDecide(resolved);
+    const response = mockDecide(resolved, location);
     setOpportunity(response.primary);
     setDirection(1);
     setStepIndex(3);
-  }, [selectedIntent]);
+  }, [selectedIntent, location]);
 
   const handlePivot = useCallback((type: "energy" | "distance" | "vibe") => {
     if (type === "vibe") {
         handleReset();
         return;
     }
-    // Return to thinking state for "Recalibration"
     setDirection(-1);
-    setStepIndex(2); 
-    
-    // Simulate engine logic swap
+    setStepIndex(2);
+
     setTimeout(() => {
-        const response = mockDecide(type === "energy" ? "chill" : "eat");
+        const response = mockDecide(
+          type === "energy" ? "chill" : "eat",
+          location ?? undefined
+        );
         setOpportunity(response.primary);
     }, 100);
-  }, [handleReset]);
+  }, [handleReset, location]);
+
+  // ── Context label for HeroSection ────────────────────
+  const heroContextLabel = geoLoading
+    ? "Locating you…"
+    : geoError
+    ? "Location unavailable"
+    : buildContextLabel("Your Location");
 
   return (
     <HandsetWrapper onBack={stepIndex === 0 ? undefined : handleBack}>
+      {/* ── Location error banner (non-blocking) ── */}
+      {!geoLoading && geoError && (
+        <div className="absolute top-0 left-0 right-0 z-50 bg-[#1a0a00] border-b border-amber-900/40 px-4 py-3 text-center">
+          <p className="text-hade-amber text-[11px] font-semibold leading-snug">
+            {geoError}
+          </p>
+        </div>
+      )}
+
       <AnimatePresence mode="wait" custom={direction}>
         <motion.div
           key={currentStep}
@@ -130,7 +170,9 @@ export default function Page() {
           className="absolute inset-0 w-full h-full bg-[#0D0D0D] overflow-hidden"
         >
           {/* 1. Static Screen: Hero */}
-          {currentStep === "HERO" && <HeroSection onStart={handleNext} />}
+          {currentStep === "HERO" && (
+            <HeroSection onStart={handleNext} contextLabel={heroContextLabel} />
+          )}
 
           {/* 2. Static Screen: Intent */}
           {currentStep === "INTENT" && (
@@ -152,8 +194,8 @@ export default function Page() {
             <div className="h-full overflow-y-auto pt-20 pb-32 px-6 no-scrollbar">
                <RecommendationCard
                   opportunity={opportunity}
-                  onGo={() => go(5)} 
-                  onInfo={() => go(4)} 
+                  onGo={() => go(5)}
+                  onInfo={() => go(4)}
                 />
                 <div className="mt-8 border-t border-white/5 pt-8">
                     <PivotSection onPivot={handlePivot} />
@@ -173,8 +215,9 @@ export default function Page() {
           {/* 6. SCROLLABLE: Map + Navigation + Pivot */}
           {currentStep === "MAP" && opportunity && (
             <div className="h-full overflow-y-auto pb-32 no-scrollbar">
-                <MapSurface 
-                  opportunity={opportunity} 
+                <MapSurface
+                  opportunity={opportunity}
+                  userLocation={location ?? undefined}
                   onNavigate={() => go(6)}
                 />
                 <div className="px-6 pt-8 space-y-6">
@@ -194,7 +237,7 @@ export default function Page() {
               </div>
               <h2 className="font-[Georgia,serif] italic text-2xl text-white mb-2">Live Pathing Active</h2>
               <p className="text-hade-muted text-sm">Proceed to {opportunity.venue_name}</p>
-              <button 
+              <button
                 onClick={handleReset}
                 className="mt-12 text-xs uppercase tracking-widest text-hade-amber font-bold"
               >

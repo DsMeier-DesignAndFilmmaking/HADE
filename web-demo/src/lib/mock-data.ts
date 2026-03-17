@@ -1,12 +1,39 @@
 /**
  * HADE web demo — mock venue and decision data.
  * 6 real Denver venues with coordinates, signals, and trust attributions.
+ *
+ * mockDecide() accepts an optional userLocation so distance_meters and
+ * eta_minutes are computed dynamically against the caller's actual coordinates.
  */
 import type { Opportunity, DecideResponse, Intent } from "./types";
 
 /** Helper: returns an ISO timestamp N minutes in the past */
 function minutesAgo(n: number): string {
   return new Date(Date.now() - n * 60_000).toISOString();
+}
+
+// ─── Haversine distance ──────────────────────────────────
+
+/** Returns distance in metres between two lat/lng points. */
+function haversineMeters(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
+  const R = 6_371_000; // Earth radius in metres
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const sinDLat = Math.sin(dLat / 2);
+  const sinDLng = Math.sin(dLng / 2);
+  const aVal =
+    sinDLat * sinDLat +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * sinDLng * sinDLng;
+  return R * 2 * Math.atan2(Math.sqrt(aVal), Math.sqrt(1 - aVal));
+}
+
+/** Walking speed: ~83 m/min (5 km/h). Returns rounded minutes. */
+function walkingMinutes(meters: number): number {
+  return Math.max(1, Math.round(meters / 83));
 }
 
 // ─── Venues ─────────────────────────────────────────────
@@ -158,13 +185,31 @@ const INTENT_PRIMARY: Record<string, number> = {
   anything: 0,
 };
 
-/** Returns a mock DecideResponse for a given intent. */
-export function mockDecide(intent: Intent): DecideResponse {
+/**
+ * Returns a mock DecideResponse for a given intent.
+ *
+ * When `userLocation` is provided, `distance_meters` and `eta_minutes` are
+ * recomputed using the real Haversine distance so the UI reflects the caller's
+ * actual position rather than the hardcoded Denver origin.
+ */
+export function mockDecide(
+  intent: Intent,
+  userLocation?: { lat: number; lng: number }
+): DecideResponse {
+  console.log("[HADE] Decision for coords:", userLocation ?? "no location provided");
+
   const primaryIdx = INTENT_PRIMARY[intent] ?? 0;
-  const primary = { ...VENUES[primaryIdx], is_primary: true };
+
+  const applyLocation = (v: Opportunity): Opportunity => {
+    if (!userLocation) return v;
+    const meters = Math.round(haversineMeters(userLocation, v.geo));
+    return { ...v, distance_meters: meters, eta_minutes: walkingMinutes(meters) };
+  };
+
+  const primary = applyLocation({ ...VENUES[primaryIdx], is_primary: true });
   const fallbacks = VENUES.filter((_, i) => i !== primaryIdx)
     .slice(0, 2)
-    .map((v) => ({ ...v, is_primary: false }));
+    .map((v) => applyLocation({ ...v, is_primary: false }));
 
   return {
     primary,
@@ -174,5 +219,11 @@ export function mockDecide(intent: Intent): DecideResponse {
   };
 }
 
-/** User's simulated position: central Denver near Union Station. */
-export const USER_LOCATION = { lat: 39.7541, lng: -104.9998 };
+/**
+ * Raleigh, NC test coordinates.
+ * Swap `userLocation` in the decision call for validation:
+ *   mockDecide("drink", TEST_NC_LOCATION)
+ * Expected: distance_meters ~2,800,000 (2,800 km to Denver venues),
+ * confirming location is flowing through and not silently defaulting to Denver.
+ */
+export const TEST_NC_LOCATION = { lat: 35.7796, lng: -78.6382 };
