@@ -60,6 +60,20 @@ class Settings(BaseSettings):
         """Sync DB URL for Celery workers (strips asyncpg driver)."""
         return self.database_url.replace("+asyncpg", "")
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def ensure_asyncpg_dialect(cls, v: str) -> str:
+        """Rewrite plain postgres:// URLs to the asyncpg dialect.
+
+        Railway and Supabase both provide DATABASE_URL as 'postgresql://' or
+        'postgres://'.  SQLAlchemy's async engine requires 'postgresql+asyncpg://'.
+        """
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
+
     @field_validator("openai_api_key")
     @classmethod
     def validate_openai_key(cls, v: str) -> str:
