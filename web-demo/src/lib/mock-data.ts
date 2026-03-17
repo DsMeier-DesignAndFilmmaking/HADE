@@ -196,7 +196,18 @@ export function mockDecide(
   intent: Intent,
   userLocation?: { lat: number; lng: number }
 ): DecideResponse {
-  console.log("[HADE] Decision for coords:", userLocation ?? "no location provided");
+  if (userLocation) {
+    console.log(
+      "%cHADE: Using location-aware mock data",
+      "color: #22C55E; font-weight: bold;",
+      `(${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}) — real distances computed`
+    );
+  } else {
+    console.warn(
+      "%cHADE: Falling back to Denver Mock — no coordinates received",
+      "color: #F59E0B; font-weight: bold;"
+    );
+  }
 
   const primaryIdx = INTENT_PRIMARY[intent] ?? 0;
 
