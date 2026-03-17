@@ -31,10 +31,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["decide"])
 
-# Search radius for venues and signals (meters)
-# 2000m gives Google Places enough density in most city grids while staying walkable.
-VENUE_SEARCH_RADIUS_M = 2000
-SIGNAL_SEARCH_RADIUS_M = 10000
+# Signal search radius (meters) — cast wide to capture the social graph.
+SIGNAL_SEARCH_RADIUS_M = 10_000
+
+
+def _radius_for_intent(intent: str | None) -> int:
+    """Return Google Places search radius in metres tuned to each intent.
+
+    Tighter radius for "eat"/"drink" (walkable blocks), wider for "scene"
+    and "adventure" where the user may travel further.
+    """
+    return {
+        "eat":       1_500,   # ~15 min walk — stay close for food
+        "drink":     1_500,   # bar-hopping range
+        "chill":     2_000,   # parks + cafés, slightly wider
+        "scene":     3_000,   # nightlife — worth a longer walk
+        "adventure": 10_000,  # explicit exploration intent
+    }.get(intent or "anything", 2_000)  # default: 2 km
 
 async def _resolve_place_venue_ids(
     place_ids: list[str],
@@ -70,11 +83,16 @@ async def decide(
         context = await build_context_state(request, auth_context.user_id, db)
 
         # ── Google Places Data ──
+        venue_radius_m = _radius_for_intent(request.intent)
+        logger.info(
+            "decide: places search lat=%.6f lng=%.6f intent=%s radius=%dm",
+            request.geo.lat, request.geo.lng, request.intent, venue_radius_m,
+        )
         places = await search_nearby(
             lat=request.geo.lat,
             lng=request.geo.lng,
             intent=request.intent,
-            radius_m=VENUE_SEARCH_RADIUS_M,
+            radius_m=venue_radius_m,
         )
 
         if not places:
@@ -157,7 +175,7 @@ async def decide(
             context=context,
             user_lat=request.geo.lat,
             user_lng=request.geo.lng,
-            radius_m=VENUE_SEARCH_RADIUS_M,
+            radius_m=venue_radius_m,
             friend_names=friend_names,
             user_names=user_names,
             relationship_labels=relationship_labels,

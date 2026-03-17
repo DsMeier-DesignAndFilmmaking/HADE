@@ -5,7 +5,6 @@ import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 
 import type { Intent, Opportunity, DecideResponse } from "@/lib/types";
-import { mockDecide } from "@/lib/mock-data";
 import { generateAgenticContent } from "@/lib/agentic";
 import { useGeolocation } from "@/hooks/useGeolocation";
 
@@ -84,6 +83,7 @@ export default function Page() {
   const [selectedIntent, setIntent] = useState<Intent | null>(null);
   const [opportunity, setOpportunity] = useState<Opportunity | null>(null);
   const [generatedPlaybook, setGeneratedPlaybook] = useState<DecideResponse | null>(null);
+  const [decisionError, setDecisionError] = useState<string | null>(null);
 
   // ── Real browser geolocation (GPS → IP fallback) ─────
   const { location, cityLabel, isApproximate, error: geoError, loading: geoLoading } = useGeolocation();
@@ -104,10 +104,12 @@ export default function Page() {
     setIntent(null);
     setOpportunity(null);
     setGeneratedPlaybook(null);
+    setDecisionError(null);
   }, []);
 
   const handleIntentSelect = useCallback((intent: Intent) => {
     setIntent(intent);
+    setDecisionError(null);
     setDirection(1);
     setStepIndex(2);
   }, []);
@@ -122,15 +124,24 @@ export default function Page() {
     }
     const resolved = selectedIntent ?? "drink";
 
-    // ── API-first: try real agentic generation, fall back to mock ──
+    // ── API call — no mock fallback. Real data or honest empty state. ──
     let playbook = generatedPlaybook;
     if (!playbook) {
+      console.log(
+        `[HADE] Calling decide: lat=${location.lat} lng=${location.lng} intent=${resolved}`
+      );
       playbook = await generateAgenticContent(location.lat, location.lng, resolved);
       if (playbook) {
         setGeneratedPlaybook(playbook);
       } else {
-        // Agentic generation unavailable — fall back to location-aware mock
-        playbook = mockDecide(resolved, location);
+        // Backend unreachable or returned no result — surface an honest error.
+        // HADE principle: "Nothing great right now" is valid output.
+        setDecisionError(
+          "Could not find venues at your current location — check back shortly."
+        );
+        setDirection(-1);
+        setStepIndex(1); // Return to intent selector so the user can retry
+        return;
       }
     }
 
@@ -164,9 +175,12 @@ export default function Page() {
         return;
       }
     }
-    // Fallback
-    const response = mockDecide(pivotIntent, location ?? undefined);
-    setOpportunity(response.primary);
+    // No mock fallback — surface an honest error and let the user retry.
+    setDecisionError(
+      "Could not find venues at your current location — check back shortly."
+    );
+    setDirection(-1);
+    setStepIndex(1);
   }, [handleReset, location]);
 
   // ── Context label for HeroSection ────────────────────
@@ -215,9 +229,15 @@ export default function Page() {
           {/* 2. Static Screen: Intent */}
           {currentStep === "INTENT" && (
             <div className="w-full h-full flex flex-col pt-[80px] px-6">
-              <p className="font-[Georgia,serif] italic text-hade-muted-light text-xl mb-12">
-                What&apos;s the move?
-              </p>
+              {decisionError ? (
+                <p className="font-[Georgia,serif] italic text-hade-amber text-base mb-6 leading-snug">
+                  {decisionError}
+                </p>
+              ) : (
+                <p className="font-[Georgia,serif] italic text-hade-muted-light text-xl mb-12">
+                  What&apos;s the move?
+                </p>
+              )}
               <IntentSelector onSelect={handleIntentSelect} selectedIntent={selectedIntent} />
             </div>
           )}
