@@ -58,8 +58,25 @@ export async function generateAgenticContent(
     });
 
     if (!res.ok) {
+      // Read and surface the actual error body so Railway errors are visible
+      // in the browser console without needing to open the Railway dashboard.
+      let serverDetail = "";
+      try {
+        const errBody = await res.json();
+        serverDetail =
+          errBody?.detail ??
+          errBody?.errors?.[0]?.message ??
+          JSON.stringify(errBody);
+      } catch {
+        serverDetail = await res.text().catch(() => "");
+      }
+      console.error(
+        `%cHADE: /api/v1/decide returned ${res.status}`,
+        "color: #EF4444; font-weight: bold;",
+        serverDetail ? `→ ${serverDetail}` : "(no body)"
+      );
       console.warn(
-        `%cHADE: /api/v1/decide returned ${res.status} — falling back to mock`,
+        "%cHADE: Falling back to mock data",
         "color: #F59E0B; font-weight: bold;"
       );
       return null;

@@ -124,7 +124,15 @@ async def search_nearby(
 
     api_key = settings.google_places_api_key
     if not api_key:
-        raise ValueError("GOOGLE_PLACES_API_KEY not configured in environment")
+        # Log clearly so Railway logs surface the missing key, but return an
+        # empty list rather than crashing — the /decide pipeline will return
+        # an honest "nothing great right now" empty state instead of a 500.
+        import logging as _logging
+        _logging.getLogger(__name__).error(
+            "[HADE] GOOGLE_PLACES_API_KEY is not set in Railway env vars. "
+            "Add it to get real venue results. Returning empty venue list."
+        )
+        return []
 
     # Query each type and merge (Google only accepts one type per request)
     all_results: dict[str, PlaceResult] = {}

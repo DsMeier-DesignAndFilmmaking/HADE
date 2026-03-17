@@ -258,6 +258,19 @@ async def _resolve_auth_context(token: str, db: AsyncSession) -> AuthContext | N
     """Resolve request auth context from either dev JWT or Supabase JWT."""
     dev_user_id = _try_decode_dev_jwt(token)
     if dev_user_id is not None:
+        # Ensure the dev user row exists so FK constraints on context_states,
+        # opportunities, etc. never fire.  This is idempotent — the SELECT is
+        # free after the first call and adds no latency to normal requests.
+        result = await db.execute(select(User).where(User.id == dev_user_id))
+        if result.scalar_one_or_none() is None:
+            db.add(User(
+                id=dev_user_id,
+                name="Dev User",
+                home_city="Denver",
+                onboarding_complete=True,
+            ))
+            await db.commit()
+            logger.info("Auto-provisioned dev user id=%s", dev_user_id)
         return AuthContext(user_id=dev_user_id, is_anonymous=False)
 
     supabase_result = await _try_decode_supabase_jwt(token)
