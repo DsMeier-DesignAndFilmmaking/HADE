@@ -81,7 +81,7 @@ const VENUE_STATIC: Record<
 };
 
 const FALLBACK_STATIC = {
-  address: "Denver, CO",
+  address: "Your Location",
   price: "$$",
   closing: "2:00 AM",
   crowd: "Live signal active",

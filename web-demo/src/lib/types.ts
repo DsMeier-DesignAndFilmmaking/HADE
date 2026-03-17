@@ -47,8 +47,7 @@ export interface PrimarySignal {
   timestamp: string; // ISO string
   vibe_label?: string;
   signal_summary?: string;
-  content?: string;    // <--- Add this (from your seeder's "content" field)
-  comment?: string;    // (Optional: keep if you still use 'comment' elsewhere)
+  comment?: string;
 }
 
 export type SignalVibe = "fire" | "chill" | "avoid";
@@ -69,14 +68,16 @@ export interface Opportunity {
   distance_meters: number;
   eta_minutes: number;
   rationale: string;
+  trust_attributions?: TrustAttribution[];
   primary_signal: PrimarySignal | null;
   geo: {
     lat: number;
     lng: number;
   };
   neighborhood?: string;
-  city?: string;       // <--- Add this (for your global city fallback)
+  city?: string;
   is_primary: boolean;
+  event?: EventInfo | null;
 }
 
 export interface DecideResponse {

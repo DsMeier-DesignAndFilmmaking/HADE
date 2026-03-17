@@ -83,8 +83,8 @@ export default function Page() {
   const [selectedIntent, setIntent] = useState<Intent | null>(null);
   const [opportunity, setOpportunity] = useState<Opportunity | null>(null);
 
-  // ── Real browser geolocation ──────────────────────────
-  const { location, error: geoError, loading: geoLoading } = useGeolocation();
+  // ── Real browser geolocation (GPS → IP fallback) ─────
+  const { location, cityLabel, isApproximate, error: geoError, loading: geoLoading } = useGeolocation();
 
   const currentStep = STEPS[stepIndex];
 
@@ -142,15 +142,25 @@ export default function Page() {
   }, [handleReset, location]);
 
   // ── Context label for HeroSection ────────────────────
+  // cityLabel comes from IP geo (e.g. "Raleigh, NC"); GPS-only sets it to null
   const heroContextLabel = geoLoading
     ? "Locating you…"
     : geoError
     ? "Location unavailable"
-    : buildContextLabel("Your Location");
+    : buildContextLabel(cityLabel ?? "Your Location");
 
   return (
     <HandsetWrapper onBack={stepIndex === 0 ? undefined : handleBack}>
-      {/* ── Location error banner (non-blocking) ── */}
+      {/* ── Approximate-location badge (IP fallback active) ── */}
+      {!geoLoading && !geoError && isApproximate && (
+        <div className="absolute top-0 left-0 right-0 z-50 bg-[#111] border-b border-white/5 px-4 py-2 text-center">
+          <p className="text-hade-muted text-[10px] tracking-wide">
+            Using approximate location · Allow GPS for a sharper signal
+          </p>
+        </div>
+      )}
+
+      {/* ── Hard error banner — only shown when both GPS and IP fail ── */}
       {!geoLoading && geoError && (
         <div className="absolute top-0 left-0 right-0 z-50 bg-[#1a0a00] border-b border-amber-900/40 px-4 py-3 text-center">
           <p className="text-hade-amber text-[11px] font-semibold leading-snug">
