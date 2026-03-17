@@ -42,9 +42,9 @@ logger = logging.getLogger(__name__)
 MIN_CONFIDENCE_FOR_DECISION = 0.5
 LLM_EMPTY_REASON_DEFAULT = "Nothing great right now — check back around 7."
 
-# Gemini configuration
-GEMINI_MODEL = "gemini-2.5-flash"
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+# Gemini configuration — model resolved from settings (env var: GEMINI_MODEL).
+# Default: gemini-1.5-flash (stable). Override in Railway to try gemini-2.5-flash.
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 LLM_TIMEOUT = 30.0
 
@@ -243,9 +243,10 @@ async def _call_gemini(prompt: str) -> LlmDecisionPayload:
     if not settings.gemini_api_key:
         raise ValueError("GEMINI_API_KEY missing")
 
+    model = settings.gemini_model
+    url = f"{GEMINI_BASE_URL}/{model}:generateContent"
     params = {"key": settings.gemini_api_key}
-    
-    # Payload updated to match your successful CURL test
+
     payload = {
         "contents": [
             {
@@ -259,8 +260,15 @@ async def _call_gemini(prompt: str) -> LlmDecisionPayload:
         }
     }
 
+    print(f"[HADE DEBUG] Calling Gemini model={model}")
+
     async with httpx.AsyncClient(timeout=LLM_TIMEOUT) as client:
-        response = await client.post(GEMINI_URL, params=params, json=payload)
+        response = await client.post(url, params=params, json=payload)
+
+    print(
+        f"[HADE DEBUG] Gemini HTTP {response.status_code}. "
+        f"Raw response (first 500 chars): {response.text[:500]}"
+    )
 
     if response.status_code != 200:
         logger.error(f"Gemini API Error {response.status_code}: {response.text[:500]}")
@@ -330,7 +338,18 @@ async def make_llm_decision(
 ) -> LlmDecisionResult:
 
     # 1. Rule-based check: If no candidates or low confidence, skip LLM
+    print(
+        f"[HADE DEBUG] make_llm_decision: provider={provider} "
+        f"candidates={len(candidate_set.candidates)} "
+        f"top_confidence={_top_confidence(candidate_set):.3f} "
+        f"threshold={MIN_CONFIDENCE_FOR_DECISION}"
+    )
+
     if not candidate_set.candidates or _top_confidence(candidate_set) < MIN_CONFIDENCE_FOR_DECISION:
+        print(
+            f"[HADE DEBUG] Rule engine short-circuit: "
+            f"{'no candidates' if not candidate_set.candidates else 'confidence too low'}"
+        )
         return LlmDecisionResult(
             decision=None,
             empty_reason=LLM_EMPTY_REASON_DEFAULT,

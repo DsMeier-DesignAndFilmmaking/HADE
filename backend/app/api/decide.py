@@ -32,7 +32,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["decide"])
 
 # Search radius for venues and signals (meters)
-VENUE_SEARCH_RADIUS_M = 1000
+# 2000m gives Google Places enough density in most city grids while staying walkable.
+VENUE_SEARCH_RADIUS_M = 2000
 SIGNAL_SEARCH_RADIUS_M = 10000
 
 async def _resolve_place_venue_ids(
@@ -161,6 +162,11 @@ async def decide(
             user_names=user_names,
             relationship_labels=relationship_labels,
             place_to_venue_id=place_to_venue_id,
+        )
+
+        print(
+            f"[HADE DEBUG] score_candidates → {len(candidate_set.candidates)} candidates "
+            f"(places_found={len(places)}, signals_weighted={len(signals)})"
         )
 
         # ── Layer 5: Decision Layer (Now with Provider Toggle) ──

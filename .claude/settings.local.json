@@ -58,7 +58,9 @@
       "Bash(2)",
       "Bash(find /Users/danielmeier/Documents/GitHub/HADE/backend -name *seed* -o -name *fixture*)",
       "Bash(npm info:*)",
-      "Bash(npm list:*)"
+      "Bash(npm list:*)",
+      "Bash(pip3 install:*)",
+      "Bash(grep -r \"from google\\\\|import google\\\\|google.generativeai\" /Users/danielmeier/Documents/GitHub/HADE/backend/app --include=*.py)"
     ]
   }
 }
