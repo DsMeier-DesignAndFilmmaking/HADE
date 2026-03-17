@@ -1,9 +1,13 @@
 /**
  * HADE web demo — mock venue and decision data.
- * 6 real Denver venues with coordinates, signals, and trust attributions.
+ * 6 demo venues with signals and trust attributions.
  *
- * mockDecide() accepts an optional userLocation so distance_meters and
- * eta_minutes are computed dynamically against the caller's actual coordinates.
+ * Venue geo coordinates are computed dynamically as offsets from the user's
+ * real GPS position so the map and navigation links work anywhere in the world.
+ * Denver coordinates have been removed entirely.
+ *
+ * mockDecide() accepts an optional userLocation and injects computed geo and
+ * directional neighbourhood labels into each returned Opportunity.
  */
 import type { Opportunity, DecideResponse, Intent } from "./types";
 
@@ -36,9 +40,65 @@ function walkingMinutes(meters: number): number {
   return Math.max(1, Math.round(meters / 83));
 }
 
-// ─── Venues ─────────────────────────────────────────────
+// ─── Per-venue geo offsets ────────────────────────────────────────────────────
+// Each venue is positioned at a fixed offset from the user's actual GPS position.
+// northMeters: positive = north, negative = south
+// eastMeters:  positive = east,  negative = west
+// Magnitudes are chosen so euclidean distance matches each venue's stored
+// distance_meters to within ~4%.
 
-export const VENUES: Opportunity[] = [
+interface VenueOffset {
+  northMeters: number;
+  eastMeters: number;
+  /** Direction label shown in UI in place of Denver neighbourhood names */
+  direction: string;
+}
+
+const VENUE_OFFSETS: Record<string, VenueOffset> = {
+  "hade-001": { northMeters:  -450, eastMeters:   800, direction: "Southeast" },
+  "hade-002": { northMeters:   900, eastMeters:  1050, direction: "Northeast" },
+  "hade-003": { northMeters: -1250, eastMeters: -1400, direction: "Southwest" },
+  "hade-004": { northMeters:   350, eastMeters: -1050, direction: "Northwest" },
+  "hade-005": { northMeters:  -600, eastMeters:  -250, direction: "South"     },
+  "hade-006": { northMeters:  -300, eastMeters:  1250, direction: "East"      },
+};
+
+const DEFAULT_GEO = { lat: 0, lng: 0 };
+
+/**
+ * Computes venue coordinates as a fixed offset from the user's actual GPS position.
+ * If no userLocation is provided, returns DEFAULT_GEO (null island) — callers are
+ * expected to guard against absent location before reaching this path.
+ *
+ * Conversion math:
+ *   deltaLat = northMeters / 111_320
+ *   deltaLng = eastMeters  / (111_320 * cos(userLat_radians))
+ *
+ * The cosine term accounts for longitude convergence at high latitudes and keeps
+ * the euclidean distance correct anywhere on Earth.
+ */
+export function generateDynamicGeo(
+  userLocation: { lat: number; lng: number } | undefined,
+  venueId: string
+): { lat: number; lng: number } {
+  if (!userLocation) return { ...DEFAULT_GEO };
+  const offset = VENUE_OFFSETS[venueId];
+  if (!offset) return { ...userLocation };
+  const LAT_DEG_PER_METER = 1 / 111_320;
+  const LNG_DEG_PER_METER =
+    1 / (111_320 * Math.cos((userLocation.lat * Math.PI) / 180));
+  return {
+    lat: userLocation.lat + offset.northMeters * LAT_DEG_PER_METER,
+    lng: userLocation.lng + offset.eastMeters  * LNG_DEG_PER_METER,
+  };
+}
+
+// ─── Venues ─────────────────────────────────────────────
+// geo and neighborhood are injected at runtime by mockDecide via generateDynamicGeo.
+
+type VenueTemplate = Omit<Opportunity, "geo" | "neighborhood">;
+
+export const VENUES: VenueTemplate[] = [
   {
     id: "hade-001",
     venue_name: "Union Station Lodge",
@@ -60,14 +120,12 @@ export const VENUES: Opportunity[] = [
       vibe_label: "Solid",
       comment: "Bartender is making off-menu old fashioneds tonight.",
     },
-    geo: { lat: 39.7527, lng: -104.9997 },
     is_primary: true,
     event: null,
-    neighborhood: "LoDo",
   },
   {
     id: "hade-002",
-    venue_name: "Death & Co Denver",
+    venue_name: "Death & Co",
     category: "Speakeasy",
     eta_minutes: 18,
     distance_meters: 1400,
@@ -79,10 +137,8 @@ export const VENUES: Opportunity[] = [
       },
     ],
     primary_signal: null,
-    geo: { lat: 39.7481, lng: -104.9877 },
     is_primary: false,
     event: null,
-    neighborhood: "RiNo",
   },
   {
     id: "hade-003",
@@ -99,10 +155,8 @@ export const VENUES: Opportunity[] = [
       },
     ],
     primary_signal: null,
-    geo: { lat: 39.7621, lng: -105.0067 },
     is_primary: false,
     event: null,
-    neighborhood: "LoHi",
   },
   {
     id: "hade-004",
@@ -123,10 +177,8 @@ export const VENUES: Opportunity[] = [
       vibe_label: "Chill",
       comment: "Half the tables open, music is right.",
     },
-    geo: { lat: 39.7548, lng: -104.9998 },
     is_primary: false,
     event: null,
-    neighborhood: "LoDo",
   },
   {
     id: "hade-005",
@@ -148,10 +200,8 @@ export const VENUES: Opportunity[] = [
       vibe_label: "Solid",
       comment: "Dancefloor is filling up, energy is perfect.",
     },
-    geo: { lat: 39.7498, lng: -104.9998 },
     is_primary: false,
     event: null,
-    neighborhood: "LoDo",
   },
   {
     id: "hade-006",
@@ -168,10 +218,8 @@ export const VENUES: Opportunity[] = [
       },
     ],
     primary_signal: null,
-    geo: { lat: 39.7711, lng: -104.9813 },
     is_primary: false,
     event: null,
-    neighborhood: "RiNo",
   },
 ];
 
@@ -179,7 +227,7 @@ export const VENUES: Opportunity[] = [
 
 const INTENT_PRIMARY: Record<string, number> = {
   drink: 0, // Union Station Lodge
-  eat: 3, // Hop Alley
+  eat: 3,   // Hop Alley
   scene: 4, // Bar Standard
   chill: 5, // Improper City
   anything: 0,
@@ -188,9 +236,10 @@ const INTENT_PRIMARY: Record<string, number> = {
 /**
  * Returns a mock DecideResponse for a given intent.
  *
- * When `userLocation` is provided, `distance_meters` and `eta_minutes` are
- * recomputed using the real Haversine distance so the UI reflects the caller's
- * actual position rather than the hardcoded Denver origin.
+ * When `userLocation` is provided, venue geo coordinates are computed as offsets
+ * from the user's actual position via generateDynamicGeo, then distance_meters
+ * and eta_minutes are recomputed using the real Haversine distance. The result
+ * is location-correct anywhere in the world — not just Denver.
  */
 export function mockDecide(
   intent: Intent,
@@ -200,27 +249,35 @@ export function mockDecide(
     console.log(
       "%cHADE: Using location-aware mock data",
       "color: #22C55E; font-weight: bold;",
-      `(${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}) — real distances computed`
+      `(${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}) — dynamic geo injected`
     );
   } else {
     console.warn(
-      "%cHADE: Falling back to Denver Mock — no coordinates received",
+      "%cHADE: Falling back to null-island geo — no coordinates received",
       "color: #F59E0B; font-weight: bold;"
     );
   }
 
   const primaryIdx = INTENT_PRIMARY[intent] ?? 0;
 
-  const applyLocation = (v: Opportunity): Opportunity => {
-    if (!userLocation) return v;
-    const meters = Math.round(haversineMeters(userLocation, v.geo));
-    return { ...v, distance_meters: meters, eta_minutes: walkingMinutes(meters) };
+  const enrich = (v: VenueTemplate, overridePrimary?: boolean): Opportunity => {
+    const geo = generateDynamicGeo(userLocation, v.id);
+    const neighborhood = VENUE_OFFSETS[v.id]?.direction;
+    const base: Opportunity = {
+      ...v,
+      geo,
+      neighborhood,
+      is_primary: overridePrimary ?? v.is_primary,
+    };
+    if (!userLocation) return base;
+    const meters = Math.round(haversineMeters(userLocation, geo));
+    return { ...base, distance_meters: meters, eta_minutes: walkingMinutes(meters) };
   };
 
-  const primary = applyLocation({ ...VENUES[primaryIdx], is_primary: true });
+  const primary = enrich(VENUES[primaryIdx], true);
   const fallbacks = VENUES.filter((_, i) => i !== primaryIdx)
     .slice(0, 2)
-    .map((v) => applyLocation({ ...v, is_primary: false }));
+    .map((v) => enrich(v, false));
 
   return {
     primary,
@@ -234,7 +291,7 @@ export function mockDecide(
  * Raleigh, NC test coordinates.
  * Swap `userLocation` in the decision call for validation:
  *   mockDecide("drink", TEST_NC_LOCATION)
- * Expected: distance_meters ~2,800,000 (2,800 km to Denver venues),
- * confirming location is flowing through and not silently defaulting to Denver.
+ * Expected: distance_meters ~950m (venues are offset relative to user position),
+ * confirming Denver coordinates are no longer used.
  */
 export const TEST_NC_LOCATION = { lat: 35.7796, lng: -78.6382 };

@@ -4,8 +4,9 @@ import { useState, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 
-import type { Intent, Opportunity } from "@/lib/types";
+import type { Intent, Opportunity, DecideResponse } from "@/lib/types";
 import { mockDecide } from "@/lib/mock-data";
+import { generateAgenticContent } from "@/lib/agentic";
 import { useGeolocation } from "@/hooks/useGeolocation";
 
 import HandsetWrapper from "@/components/HandsetWrapper";
@@ -82,6 +83,7 @@ export default function Page() {
   const [direction, setDirection] = useState(1);
   const [selectedIntent, setIntent] = useState<Intent | null>(null);
   const [opportunity, setOpportunity] = useState<Opportunity | null>(null);
+  const [generatedPlaybook, setGeneratedPlaybook] = useState<DecideResponse | null>(null);
 
   // ── Real browser geolocation (GPS → IP fallback) ─────
   const { location, cityLabel, isApproximate, error: geoError, loading: geoLoading } = useGeolocation();
@@ -101,6 +103,7 @@ export default function Page() {
     setStepIndex(0);
     setIntent(null);
     setOpportunity(null);
+    setGeneratedPlaybook(null);
   }, []);
 
   const handleIntentSelect = useCallback((intent: Intent) => {
@@ -109,7 +112,7 @@ export default function Page() {
     setStepIndex(2);
   }, []);
 
-  const handleThinkingComplete = useCallback(() => {
+  const handleThinkingComplete = useCallback(async () => {
     if (!location) {
       // Location never resolved — bounce back to HERO so the error banner is visible
       console.warn("[HADE] Coordinates unavailable at decision time. Returning to start.");
@@ -118,27 +121,52 @@ export default function Page() {
       return;
     }
     const resolved = selectedIntent ?? "drink";
-    const response = mockDecide(resolved, location);
-    setOpportunity(response.primary);
+
+    // ── API-first: try real agentic generation, fall back to mock ──
+    let playbook = generatedPlaybook;
+    if (!playbook) {
+      playbook = await generateAgenticContent(location.lat, location.lng, resolved);
+      if (playbook) {
+        setGeneratedPlaybook(playbook);
+      } else {
+        // Agentic generation unavailable — fall back to location-aware mock
+        playbook = mockDecide(resolved, location);
+      }
+    }
+
+    setOpportunity(playbook.primary);
     setDirection(1);
     setStepIndex(3);
-  }, [selectedIntent, location]);
+  }, [selectedIntent, location, generatedPlaybook]);
 
-  const handlePivot = useCallback((type: "energy" | "distance" | "vibe") => {
+  const handlePivot = useCallback(async (type: "energy" | "distance" | "vibe") => {
     if (type === "vibe") {
         handleReset();
         return;
     }
+
+    // Clear cached playbook so the next run generates fresh agentic content
+    setGeneratedPlaybook(null);
+
+    const pivotIntent: Intent = type === "energy" ? "chill" : "eat";
+    setIntent(pivotIntent);
     setDirection(-1);
     setStepIndex(2);
 
-    setTimeout(() => {
-        const response = mockDecide(
-          type === "energy" ? "chill" : "eat",
-          location ?? undefined
-        );
-        setOpportunity(response.primary);
-    }, 100);
+    // Small delay so the ThinkingState screen mounts before we resolve
+    await new Promise((r) => setTimeout(r, 100));
+
+    if (location) {
+      const playbook = await generateAgenticContent(location.lat, location.lng, pivotIntent);
+      if (playbook) {
+        setGeneratedPlaybook(playbook);
+        setOpportunity(playbook.primary);
+        return;
+      }
+    }
+    // Fallback
+    const response = mockDecide(pivotIntent, location ?? undefined);
+    setOpportunity(response.primary);
   }, [handleReset, location]);
 
   // ── Context label for HeroSection ────────────────────
