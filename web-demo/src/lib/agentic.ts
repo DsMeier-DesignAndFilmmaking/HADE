@@ -10,6 +10,11 @@ import type { DecideResponse, Intent } from "./types";
 const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ?? "";
 
+// Pre-issued dev JWT (HS256, signed with JWT_SECRET on the Railway backend).
+// Set NEXT_PUBLIC_DEMO_TOKEN in Vercel environment variables.
+const DEMO_TOKEN =
+  process.env.NEXT_PUBLIC_DEMO_TOKEN ?? "";
+
 /**
  * Calls the real HADE backend to generate an agentic recommendation.
  * Returns null on any network/API error — caller is responsible for fallback.
@@ -27,10 +32,22 @@ export async function generateAgenticContent(
     return null;
   }
 
+  if (!DEMO_TOKEN) {
+    console.warn(
+      "%cHADE: NEXT_PUBLIC_DEMO_TOKEN not set — request will be rejected with 401",
+      "color: #EF4444; font-weight: bold;"
+    );
+  }
+
+  console.log("[HADE] Auth Header Present:", !!DEMO_TOKEN);
+
   try {
     const res = await fetch(`${API_BASE}/api/v1/decide`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(DEMO_TOKEN ? { Authorization: `Bearer ${DEMO_TOKEN}` } : {}),
+      },
       body: JSON.stringify({
         geo: { lat, lng },
         intent,
